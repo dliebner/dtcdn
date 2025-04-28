@@ -110,7 +110,7 @@ chown -R dtcdn:dtcdn /home/dtcdn
 
 # install composer extensions
 cd /home/dtcdn
-su dtcdn -c "composer require gabrielelana/byte-units guzzlehttp/guzzle:^7"
+su dtcdn -c "composer require gabrielelana/byte-units guzzlehttp/guzzle:^6.5"
 # flexihash/flexihash is used on the hub server, don't think we need it here
 # obregonco/backblaze-b2 - the original b2 repo we forked from
 su dtcdn -c "composer config repositories.backblaze-b2 vcs https://github.com/dliebner/backblaze-b2"
