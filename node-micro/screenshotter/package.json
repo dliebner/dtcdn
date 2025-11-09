@@ -1,0 +1,13 @@
+{
+	"name": "screenshotter",
+	"version": "0.0.1",
+	"description": "A standalone microservice for taking webpage screenshots.",
+	"main": "index.js",
+	"scripts": {
+		"start": "node index.js"
+	},
+	"dependencies": {
+		"express": "^5.1.0",
+		"puppeteer": "^24.19.1"
+	}
+}
