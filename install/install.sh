@@ -173,6 +173,8 @@ sudo a2enmod mpm_worker
 sudo useradd -m -s /bin/bash dtcdn
 # add dtcdn user to www-data group
 sudo usermod -a -G www-data dtcdn
+# make sure shell profile exists
+su dtcdn -c "touch /home/dtcdn/.bash_profile"
 
 # install composer
 ./install-composer.sh
@@ -187,6 +189,12 @@ su dtcdn -c "composer require gabrielelana/byte-units guzzlehttp/guzzle:^6.5"
 # obregonco/backblaze-b2 - the original b2 repo we forked from
 su dtcdn -c "composer config repositories.backblaze-b2 vcs https://github.com/dliebner/backblaze-b2"
 su dtcdn -c "composer require dliebner/backblaze-b2:dev-master"
+
+# install nvm and node
+su - dtcdn -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash"
+su - dtcdn -c "nvm install --lts"
+
+# go back to install dir
 cd /home/dtcdn/install
 
 # copy files
