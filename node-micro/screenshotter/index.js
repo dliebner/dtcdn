@@ -21,7 +21,7 @@ app.get('/screenshot', async (req, res) => {
     const cropWidth = parseInt(rq.cropWidth, 10) || null;
     const cropHeight = parseInt(rq.cropHeight, 10) || null;
     const quality = parseInt(rq.quality, 10) || 90;
-    const devicePixelRatio = parseInt(rq.devicePixelRatio, 10) || 2;
+    const devicePixelRatio = parseInt(rq.devicePixelRatio, 10) || 1;
 
 	// 1. Validate input
 	if (!url) {
