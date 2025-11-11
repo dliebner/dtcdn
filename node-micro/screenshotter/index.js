@@ -14,7 +14,7 @@ app.get('/screenshot', async (req, res) => {
 		format = 'jpeg',
 	} = rq;
 
-	const debug = !!(rq.debug ?? true);
+	const debug = !!rq.debug;
     const vw = parseInt(rq.viewportWidth, 10) || 1200;
     const vh = parseInt(rq.viewportHeight, 10) || 1000;
     const cropX = parseInt(rq.cropX, 10) || 0;
