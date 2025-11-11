@@ -38,13 +38,12 @@ app.get('/screenshot', async (req, res) => {
 		const page = await browser.newPage();
 
 		// 3. Configure the page and navigate
-		await page.setViewport({ width: vw, height: vh });
+		await page.setViewport({ width: vw, height: vh, devicePixelRatio: devicePixelRatio });
 		await page.goto(url, { waitUntil: 'networkidle0', timeout: 10000 });
 
         // --- Screenshot Options ---
         const screenshotOptions = {
             type: format === 'jpeg' ? 'jpeg' : 'png', // Default to png for safety
-			devicePixelRatio: devicePixelRatio
         };
 
         // Add crop/clip options if all are provided
