@@ -41,8 +41,8 @@ app.get('/screenshot', async (req, res) => {
 		await page.setViewport({ width: vw, height: vh, deviceScaleFactor: devicePixelRatio });
 		await page.goto(url, { waitUntil: 'networkidle0', timeout: 10000 });
 
-		// Add an additional delay
-		await new Promise(resolve => setTimeout(resolve, 1000));
+		// TEST: Add an additional delay
+		await page.waitForTimeout(5000);
 
         // --- Screenshot Options ---
         const screenshotOptions = {
