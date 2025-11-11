@@ -14,6 +14,7 @@ app.get('/screenshot', async (req, res) => {
 		format = 'jpeg',
 	} = rq;
 
+	const debug = !!(rq.debug ?? true);
     const vw = parseInt(rq.viewportWidth, 10) || 1200;
     const vh = parseInt(rq.viewportHeight, 10) || 1000;
     const cropX = parseInt(rq.cropX, 10) || 0;
@@ -37,12 +38,18 @@ app.get('/screenshot', async (req, res) => {
 		});
 		const page = await browser.newPage();
 
+		if( debug ) {
+		
+			page.on('console', msg => {
+				const type = msg.type().toUpperCase();
+				console.log(`[BROWSER ${type}] ${msg.text()}`);
+			});
+
+		}
+
 		// 3. Configure the page and navigate
 		await page.setViewport({ width: vw, height: vh, deviceScaleFactor: devicePixelRatio });
 		await page.goto(url, { waitUntil: 'networkidle0', timeout: 10000 });
-
-		// TEST: Add an additional delay
-		await new Promise(resolve => setTimeout(resolve, 5000));
 
         // --- Screenshot Options ---
         const screenshotOptions = {
