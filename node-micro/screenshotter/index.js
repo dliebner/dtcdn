@@ -42,7 +42,7 @@ app.get('/screenshot', async (req, res) => {
 		await page.goto(url, { waitUntil: 'networkidle0', timeout: 10000 });
 
 		// TEST: Add an additional delay
-		await page.waitForTimeout(5000);
+		await new Promise(resolve => setTimeout(resolve, 5000));
 
         // --- Screenshot Options ---
         const screenshotOptions = {
