@@ -48,7 +48,7 @@ app.get('/screenshot', async (req, res) => {
         };
 
         // Add crop/clip options if all are provided
-        if (cropWidth || cropHeight) {
+        if (cropX || cropY || cropWidth || cropHeight) {
             screenshotOptions.clip = {
                 x: parseInt(cropX),
                 y: parseInt(cropY),
