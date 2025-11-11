@@ -21,6 +21,7 @@ app.get('/screenshot', async (req, res) => {
     const cropWidth = parseInt(rq.cropWidth, 10) || null;
     const cropHeight = parseInt(rq.cropHeight, 10) || null;
     const quality = parseInt(rq.quality, 10) || 90;
+    const devicePixelRatio = parseInt(rq.devicePixelRatio, 10) || 2;
 
 	// 1. Validate input
 	if (!url) {
@@ -42,7 +43,8 @@ app.get('/screenshot', async (req, res) => {
 
         // --- Screenshot Options ---
         const screenshotOptions = {
-            type: format === 'jpeg' ? 'jpeg' : 'png' // Default to png for safety
+            type: format === 'jpeg' ? 'jpeg' : 'png', // Default to png for safety
+			devicePixelRatio: devicePixelRatio
         };
 
         // Add crop/clip options if all are provided
@@ -50,8 +52,8 @@ app.get('/screenshot', async (req, res) => {
             screenshotOptions.clip = {
                 x: parseInt(cropX),
                 y: parseInt(cropY),
-                width: parseInt(cropWidth ?? vw),
-                height: parseInt(cropHeight ?? vh)
+                width: parseInt(cropWidth ?? (vw - cropX)),
+                height: parseInt(cropHeight ?? (vh - cropY))
             };
         }
 
