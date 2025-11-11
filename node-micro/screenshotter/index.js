@@ -38,7 +38,7 @@ app.get('/screenshot', async (req, res) => {
 		const page = await browser.newPage();
 
 		// 3. Configure the page and navigate
-		await page.setViewport({ width: vw, height: vh, devicePixelRatio: devicePixelRatio });
+		await page.setViewport({ width: vw, height: vh, deviceScaleFactor: devicePixelRatio });
 		await page.goto(url, { waitUntil: 'networkidle0', timeout: 10000 });
 
         // --- Screenshot Options ---
