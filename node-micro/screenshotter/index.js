@@ -114,12 +114,48 @@ async function takeScreenshot(opts) {
 }
 
 app.get('/screenshot', async (req, res) => {
+	// Define preconfigs keyed by domain+page
+	const configs = {
+		'domo.town:user': {
+			url: (slug) => `https://domo.town/@${slug}/#/ogScreenshot`,
+			slugRegex: /^[\-\._0-9a-z]+$/i,
+			viewportWidth: 1200,
+			viewportHeight: 688,
+			cropY: 60,
+		},
+	};
+
+	const { domain, page, slug, format } = req.query;
+
+	if (!domain || !page) {
+		return res.status(400).json({ error: 'Missing required params: domain, page' });
+	}
+
+	const configKey = `${domain}:${page}`;
+	const config = configs[configKey];
+
+	if (!config) {
+		return res.status(400).json({ error: `No preconfig found for ${configKey}` });
+	}
+
+	const {url, slugRegex, ...rest} = config;
+
+	// Validate slug format
+	if (slugRegex && !slugRegex.test(slug)) {
+		return res.status(400).json({ error: `Invalid slug format for ${configKey}` });
+	}
+
+	const ssOpts = {
+		url: url( slug ),
+		format: (format || 'jpeg') === 'jpeg' ? 'jpeg' : 'png',
+		...rest
+	};
+
 	// Add each job to the queue; the queue enforces concurrency
 	queue.add(async () => {
 		try {
-			const buffer = await takeScreenshot(req.query);
-			const type = (req.query.format || 'jpeg') === 'jpeg' ? 'jpeg' : 'png';
-			res.setHeader('Content-Type', `image/${type}`);
+			const buffer = await takeScreenshot( ssOpts );
+			res.setHeader('Content-Type', `image/${ssOpts.format}`);
 			res.send(buffer);
 		} catch (err) {
 			console.error(`[${new Date().toISOString()}] Screenshot failed:`, err);
