@@ -8,6 +8,7 @@
 	},
 	"dependencies": {
 		"express": "^5.1.0",
-		"puppeteer": "^24.19.1"
+		"puppeteer": "^24.19.1",
+		"p-queue": "^9.0.0"
 	}
 }
