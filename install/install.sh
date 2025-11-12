@@ -173,8 +173,9 @@ sudo a2enmod mpm_event
 sudo useradd -m -s /bin/bash dtcdn
 # add dtcdn user to www-data group
 sudo usermod -a -G www-data dtcdn
-# make sure shell profile exists
-su dtcdn -c "touch /home/dtcdn/.bash_profile"
+# copy bash profile stuff
+sudo cp /home/dtcdn/install/.profile /home/dtcdn/
+sudo cp /home/dtcdn/install/.bashrc /home/dtcdn/
 
 # install composer
 ./install-composer.sh
@@ -197,6 +198,9 @@ su - dtcdn -c "nvm install --lts"
 # install chromium dependencies (for puppeteer)
 sudo apt install libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libdrm2 libexpat1 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libudev1 libuuid1 libx11-6 libx11-xcb1 libxcb-dri3-0 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxkbcommon0 libxrandr2 libxrender1 libxshmfence1 libxss1 libxtst6
 
+# install pm2 to run node services
+su - dtcdn -c "npm install pm2 -g"
+
 # go back to install dir
 cd /home/dtcdn/install
 
@@ -215,3 +219,7 @@ sudo service php7.4-fpm restart
 # start custom daemons
 sudo systemctl enable dtcdn-docker-events.service
 sudo systemctl start dtcdn-docker-events.service
+
+# start and save pm2 services
+su - dtcdn -c "pm2 start ~/node-micro/screenshotter/index.js --name 'screenshotter'"
+su - dtcdn -c "pm2 save"

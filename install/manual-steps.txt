@@ -1,3 +1,7 @@
+
+# enable pm2 to start on boot
+su - dtcdn -c "pm2 startup systemd -u dtcdn --hp /home/dtcdn"
+
 #
 # Allow apache status from our IP
 #
