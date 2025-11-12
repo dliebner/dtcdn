@@ -98,8 +98,8 @@ async function takeScreenshot(opts) {
 			screenshotOptions.clip = {
 				x: cropX,
 				y: cropY,
-				width: cropWidth,
-				height: cropHeight,
+				width: cropWidth ?? (vw - cropX),
+				height: cropHeight ?? (vh - cropY),
 			};
 		}
 
