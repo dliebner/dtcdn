@@ -7,14 +7,14 @@ vi /etc/apache2/mods-enabled/status.conf
 
 
 #
-# Set mpm_worker config
+# Set mpm_event config
 #
 
-vi /etc/apache2/mods-enabled/mpm_worker.conf
+vi /etc/apache2/mods-available/mpm_event.conf
 
 # we want to allow 10000 threads in total
 # 10000 / 25 processes = 400
-<IfModule mpm_worker_module>
+<IfModule mpm_event_module>
 	ServerLimit 25
 	StartServers 2
 	MaxRequestWorkers 10000
@@ -23,7 +23,8 @@ vi /etc/apache2/mods-enabled/mpm_worker.conf
 	ThreadLimit 400
 	ThreadsPerChild 400
 	KeepAlive On
-	KeepAliveTimeout 1
+	KeepAliveTimeout 5
+	MaxKeepAliveRequests 500
 	MaxConnectionsPerChild 10000000
 </IfModule>
 

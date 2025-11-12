@@ -165,9 +165,9 @@ echo "extension=redis.so" | sudo tee /etc/php/7.4/mods-available/redis.ini > /de
 sudo ln -s /etc/php/7.4/mods-available/redis.ini /etc/php/7.4/fpm/conf.d/20-redis.ini
 sudo ln -s /etc/php/7.4/mods-available/redis.ini /etc/php/7.4/cli/conf.d/20-redis.ini
 
-# switch to mpm_worker
+# switch to mpm_event
 sudo a2dismod php7.4 mpm_prefork
-sudo a2enmod mpm_worker
+sudo a2enmod mpm_event
 
 # create dtcdn user
 sudo useradd -m -s /bin/bash dtcdn
