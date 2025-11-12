@@ -1,4 +1,7 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const puppeteer = require('puppeteer');
 const PQueue = require('p-queue').default;
 
@@ -7,6 +10,8 @@ const PORT = process.env.PORT || 4101;
 
 // Limit concurrent screenshots (prevents CPU/RAM spikes)
 const queue = new PQueue({ concurrency: 10 });
+
+const CACHE_DIR = './cache';
 
 // Launch one shared browser instance at startup
 let browserPromise;
@@ -53,6 +58,19 @@ process.on('SIGTERM', async () => {
 	await browser.close();
 	process.exit(0);
 });
+
+function toBase62(buffer) {
+	const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+	const big = BigInt('0x' + buffer.toString('hex'));
+	let result = '';
+	let n = big;
+	while (n > 0) {
+		const r = n % 62n;
+		result = alphabet[Number(r)] + result;
+		n = n / 62n;
+	}
+	return result.padStart(27, '0'); // ~27 chars for a 160-bit (SHA-1) hash
+}
 
 // Helper: take screenshot using an existing page
 async function takeScreenshot(opts) {
@@ -138,7 +156,8 @@ app.get('/screenshot', async (req, res) => {
 		return res.status(400).json({ error: `No preconfig found for ${configKey}` });
 	}
 
-	const {url, slugRegex, ...rest} = config;
+	const {url, slugRegex, maxAge: _maxAge, ...rest} = config;
+	const maxAge = _maxAge ?? 86400; // cache default: 1 day
 
 	// Validate slug format
 	if (slugRegex && !slugRegex.test(slug)) {
@@ -151,11 +170,40 @@ app.get('/screenshot', async (req, res) => {
 		...rest
 	};
 
+	const cacheKey = toBase62(
+		crypto.createHash('sha1')
+			.update(`${domain}:${page}:${slug}:${ssOpts.format}`)
+			.digest()
+	);
+		
+	const subdir = path.join(CACHE_DIR, cacheKey[0], cacheKey[1], cacheKey[2]);
+	const filePath = path.join(subdir, `${cacheKey}.${ssOpts.format}`);
+
+	// Serve cached file if it exists and isn’t stale
+	if (fs.existsSync(filePath)) {
+		const stats = fs.statSync(filePath);
+		const age = (Date.now() - stats.mtimeMs) / 1000;
+		if (age < maxAge) {
+			const buffer = fs.readFileSync(filePath);
+			res.setHeader('Content-Type', `image/${ssOpts.format}`);
+			res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
+			res.setHeader('X-Cache', 'HIT');
+			return res.send(buffer);
+		}
+	}
+
 	// Add each job to the queue; the queue enforces concurrency
 	queue.add(async () => {
 		try {
 			const buffer = await takeScreenshot( ssOpts );
+	
+			// Save cached screenshot
+			fs.mkdirSync(subdir, { recursive: true });
+			fs.writeFileSync(filePath, buffer);
+
 			res.setHeader('Content-Type', `image/${ssOpts.format}`);
+			res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
+			res.setHeader('X-Cache', 'MISS');
 			res.send(buffer);
 		} catch (err) {
 			console.error(`[${new Date().toISOString()}] Screenshot failed:`, err);
