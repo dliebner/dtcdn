@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const puppeteer = require('puppeteer');
@@ -11,7 +12,7 @@ const PORT = process.env.PORT || 4101;
 // Limit concurrent screenshots (prevents CPU/RAM spikes)
 const queue = new PQueue({ concurrency: 10 });
 
-const CACHE_DIR = '~/node-micro/screenshotter/cache';
+const CACHE_DIR = path.join(os.homedir(), 'node-micro/screenshotter/cache');
 
 // Launch one shared browser instance at startup
 let browserPromise;
