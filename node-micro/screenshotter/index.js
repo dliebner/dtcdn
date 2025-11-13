@@ -138,8 +138,7 @@ app.get('/screenshot', async (req, res) => {
 			url: (slug) => `https://domo.town/og/user/?username=${slug}`,
 			slugRegex: /^[\-\._0-9a-z]+$/i,
 			viewportWidth: 1200,
-			viewportHeight: 688,
-			cropY: 60,
+			viewportHeight: 628,
 		},
 	};
 
