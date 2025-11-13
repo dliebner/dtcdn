@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 4101;
 // Limit concurrent screenshots (prevents CPU/RAM spikes)
 const queue = new PQueue({ concurrency: 10 });
 
-const CACHE_DIR = './cache';
+const CACHE_DIR = '~/node-micro/screenshotter/cache';
 
 // Launch one shared browser instance at startup
 let browserPromise;
@@ -135,7 +135,7 @@ app.get('/screenshot', async (req, res) => {
 	// Define preconfigs keyed by domain+page
 	const configs = {
 		'domo.town:user': {
-			url: (slug) => `https://domo.town/@${slug}/#/ogScreenshot`,
+			url: (slug) => `https://domo.town/og/user/?username=${slug}`,
 			slugRegex: /^[\-\._0-9a-z]+$/i,
 			viewportWidth: 1200,
 			viewportHeight: 688,
