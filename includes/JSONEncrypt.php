@@ -3,35 +3,147 @@
 if( !defined('IN_SCRIPT') ) die( "Hacking attempt" );
 
 class JSONEncrypt {
-	
-	public static function encode($payload, $key) {
-		
-		$plaintext = self::jsonEncode($payload);
-		$iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length($cipher="aes-128-ctr"));
-		$ciphertext_raw = openssl_encrypt($plaintext, $cipher, $key, $options=OPENSSL_RAW_DATA, $iv);
-		$hmac = hash_hmac('sha256', $ciphertext_raw, $key, $as_binary=true);
-		$ciphertext = self::urlsafeB64Encode( $iv.$hmac.$ciphertext_raw );
-		
-		return $ciphertext;
-		
-	}
-	
-	public static function decode($ciphertext, $key) {
-		
-		if( !$c = self::urlsafeB64Decode($ciphertext) ) return false;
-		$ivlen = openssl_cipher_iv_length($cipher="aes-128-ctr");
-		$iv = substr($c, 0, $ivlen);
-		$hmac = substr($c, $ivlen, $sha2len=32);
-		$ciphertext_raw = substr($c, $ivlen+$sha2len);
-		if( !$original_plaintext = openssl_decrypt($ciphertext_raw, $cipher, $key, $options=OPENSSL_RAW_DATA, $iv) ) return false;
-		$calcmac = hash_hmac('sha256', $ciphertext_raw, $key, $as_binary=true);
-		if (hash_equals($hmac, $calcmac))//PHP 5.6+ timing attack safe comparison
-		{
-			if( $payload = self::jsonDecode($original_plaintext) ) return $payload;
+
+	// AES-256-GCM is the industry standard for AEAD
+	const CIPHER = 'aes-256-gcm';
+	const TAG_LENGTH = 16; // Standard GCM tag size
+
+	private static $keyCache = [];
+
+	/**
+	 * Convert password into 32-byte binary key.
+	 * TODO: Once we move to 32 byte hex keys (64 chars long) this will change to `hex2bin($key)`
+	 */
+	private static function getKey( $password ) {
+
+		// 1. Check Cache (Fastest)
+		if( isset(self::$keyCache[$password]) ) {
+
+			return self::$keyCache[$password];
+
 		}
-			
-		return false;
-		
+
+		// 2. Generate Key
+		$binaryKey = hash('sha256', $password, true);
+
+		/* Future version
+		$binaryKey = hex2bin($key);
+
+		if( $binaryKey === false || strlen($binaryKey) !== 32 ) {
+
+			throw new InvalidArgumentException("Key must be a 64-character hex string");
+
+		}
+		*/
+
+		// 3. Store in Cache
+		self::$keyCache[$password] = $binaryKey;
+
+		return $binaryKey;
+
+	}
+
+	public static function encode($payload, $key) {
+
+		// Convert "password" style key to a 32-byte binary key
+		$keyBin = self::getKey( $key );
+
+		/* Re-enable once we move to 32 byte hex keys
+		// 1. Validate Key (Must be 32 bytes / 256 bits)
+		if( strlen($keyBin) !== 32 ) {
+
+			throw new Exception("Key must be 32 bytes (raw binary) for AES-256");
+
+		}
+		*/
+
+		// Use the helper to ensure JSON errors throw exceptions
+		$plaintext = self::jsonEncode($payload);
+
+		// 2. Generate IV (12 bytes is standard for GCM)
+		$ivlen = openssl_cipher_iv_length(self::CIPHER);
+		$iv = random_bytes($ivlen);
+
+		// 3. Encrypt
+		// $tag is passed by reference and populated by OpenSSL
+		$tag = "";
+		$ciphertext_raw = openssl_encrypt(
+			$plaintext,
+			self::CIPHER,
+			$keyBin,
+			OPENSSL_RAW_DATA,
+			$iv,
+			$tag,
+			"", // AAD (Optional)
+			self::TAG_LENGTH
+		);
+
+		if( $ciphertext_raw === false ) {
+
+			throw new Exception("Encryption failed");
+
+		}
+
+		// 4. Bundle (IV + Tag + Ciphertext)
+		return self::urlsafeB64Encode($iv . $tag . $ciphertext_raw);
+	}
+
+	public static function decode($ciphertext, $key) {
+
+		// Convert "password" style key to a 32-byte binary key
+		$keyBin = self::getKey( $key );
+
+		/* Re-enable once we move to 32 byte hex keys
+		if( strlen($key) !== 32 ) {
+
+			throw new Exception("Key must be 32 bytes (raw binary) for AES-256");
+
+		}
+		*/
+
+		if( !$c = self::urlsafeB64Decode($ciphertext) ) {
+
+			return false;
+
+		}
+
+		$ivlen = openssl_cipher_iv_length(self::CIPHER);
+		$totalLen = strlen($c);
+
+		// Basic Length Check
+		if( $totalLen < $ivlen + self::TAG_LENGTH) {
+
+			return false;
+
+		}
+
+		// 1. Extract Components
+		$iv = substr($c, 0, $ivlen);
+		$tag = substr($c, $ivlen, self::TAG_LENGTH);
+		$ciphertext_raw = substr($c, $ivlen + self::TAG_LENGTH);
+
+		// 2. Decrypt & Verify
+		// GCM verifies the Tag against the IV and Ciphertext internally.
+		$original_plaintext = openssl_decrypt(
+			$ciphertext_raw,
+			self::CIPHER,
+			$keyBin,
+			OPENSSL_RAW_DATA,
+			$iv,
+			$tag
+		);
+
+		// If decryption fails (or tag mismatch), this returns false.
+		if( $original_plaintext === false ) {
+
+			return false;
+
+		}
+
+		// 3. Decode JSON
+		// Returns the object or throws exception on JSON error
+		return self::jsonDecode($original_plaintext);
+
 	}
 
 	/**
