@@ -57,7 +57,9 @@ unset MYSQL_DTCDN_PW
 sudo service mysql restart
 
 # ufw rules assumed to be set up
-# apache mods and php7.4-fpm conf assumed to be set up
+# apache mods and php7.4-fpm conf assumed to be set up (see install.sh for the pool values);
+# the -ssl vhost needs these modules, which are idempotent to enable again
+sudo a2enmod proxy proxy_http http2
 # phpMyAdmin assumed to be installed and set up
 
 # copy apache files
@@ -95,7 +97,7 @@ sudo service apache2 restart
 
 # redis assumed to be installed and configured
 # php-redis assumed to be installed
-# apache assumed to be using mpm_worker
+# apache assumed to be using mpm_event
 
 # create dtcdn user
 sudo useradd -m -s /bin/bash dtcdn

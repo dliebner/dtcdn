@@ -104,7 +104,7 @@ sudo ufw allow 10000
 
 echo "y" | sudo ufw enable
 
-sudo a2enmod rewrite proxy_fcgi setenvif expires headers
+sudo a2enmod rewrite proxy proxy_fcgi proxy_http http2 setenvif expires headers
 sudo a2enconf php7.4-fpm
 
 # install phpMyAdmin
@@ -211,6 +211,28 @@ sudo cp dtcdn-docker-events.service /etc/systemd/system/
 
 # chown files again
 chown -R dtcdn:dtcdn /home/dtcdn/
+
+# php-fpm pool: raise the Ubuntu defaults (10 children) so a few uploaders plus the hub's once-a-second
+# heartbeat can't fill the pool. Each child serves one request at a time and uses ~20 MB here, so 64
+# children is ~1.3 GB at full load. The slow log names any request over 2 s; the status page is served
+# to localhost by the ssl vhost (/fpm-status). See manual-steps.txt for the reasoning.
+FPM_POOL=/etc/php/7.4/fpm/pool.d/www.conf
+sudo sed -i -E \
+	-e 's/^;?listen\.backlog = .*/listen.backlog = 1024/' \
+	-e 's/^pm\.max_children = .*/pm.max_children = 64/' \
+	-e 's/^pm\.start_servers = .*/pm.start_servers = 16/' \
+	-e 's/^pm\.min_spare_servers = .*/pm.min_spare_servers = 8/' \
+	-e 's/^pm\.max_spare_servers = .*/pm.max_spare_servers = 32/' \
+	-e 's/^;?pm\.max_requests = .*/pm.max_requests = 10000/' \
+	-e 's/^;?pm\.status_path = .*/pm.status_path = \/fpm-status/' \
+	-e 's#^;?slowlog = .*#slowlog = /var/log/php7.4-fpm.slow.log#' \
+	-e 's/^;?request_slowlog_timeout = .*/request_slowlog_timeout = 2s/' \
+	-e 's/^;?request_terminate_timeout = .*/request_terminate_timeout = 300s/' \
+	$FPM_POOL
+# listen.backlog is capped by the kernel's somaxconn (4096 on 20.04's kernel; pin it)
+echo 'net.core.somaxconn = 4096' | sudo tee /etc/sysctl.d/60-fpm.conf > /dev/null
+sudo sysctl --system > /dev/null
+sudo php-fpm7.4 -t
 
 # restart apache
 sudo service apache2 restart
