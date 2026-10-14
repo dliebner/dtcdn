@@ -111,6 +111,10 @@ systemctl status dtcdn-docker-events --no-pager | head -5
 #   sudo ls -la /home/dtcdn/transcoding/
 #   sudo rm -r /home/dtcdn/transcoding/<version filename>
 
+# Before the first upload after the pull: the ffmpeg container now runs as the dtcdn user. Check that the image
+# starts that way and still prints progress lines (a failure here would fail every upload at once):
+#   sudo -u dtcdn docker run --rm --user $(id -u dtcdn):$(id -g dtcdn) dliebner/ffmpeg-entrydefault ffmpeg -f lavfi -i testsrc=d=1 -progress /dev/stdout -f null -
+
 # Check the pipeline's state at any time (and sweep it now with --fix):
 #   sudo -u dtcdn /usr/bin/php7.4 /home/dtcdn/scripts/jobs-status.php
 # A transcode is finished by the die daemon at once, or by cron/minute.php's sweep within a minute if the daemon

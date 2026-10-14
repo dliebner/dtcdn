@@ -1162,6 +1162,12 @@ class TranscodingJob {
 	const TRANSCODE_MAX_ACTIVE_MINUTES = 120;
 	/** upload-progress reports an error for a job this old that hasn't produced its version, rather than a bar that never ends */
 	const TRANSCODE_STALE_MINUTES = 15;
+	/**
+	 * A finish that keeps failing (hub unreachable, probe error) is retried by the sweep until the job is this old, counted
+	 * from its creation. Inside the hub's one-hour rule for a source with no version: past that the hub has deleted the
+	 * source and refuses the version anyway, so the output is thrown away instead.
+	 */
+	const TRANSCODE_FINISH_RETRY_MAX_MINUTES = 50;
 	/** A claim (transcode_started) with no container recorded yet is startTranscode() mid-run for this long; older ones are released */
 	const TRANSCODE_CLAIM_GRACE_MINUTES = 5;
 	/** A cloud upload marked started this long ago and never finished is re-queued by the minute sweep */
@@ -1371,9 +1377,11 @@ class TranscodingJob {
 
 		$db = db();
 
+		// A fail code on an active row is a finish waiting to be retried (its container has exited), not an encode
 		$sql = "SELECT COUNT(*) as count
 			FROM transcoding_jobs
-			WHERE transcode_is_active = 1";
+			WHERE transcode_is_active = 1
+			AND transcode_fail_code IS NULL";
 
 		if( !$result = $db->sql_query($sql) ) throw new QueryException("Error selecting from transcoding_jobs", $sql);
 
@@ -1501,6 +1509,32 @@ class TranscodingJob {
 		}
 
 		return $jobs;
+
+	}
+
+	/**
+	 * The job already producing this version, if there is one: unfinished, or finished with its version and not yet
+	 * expired. A retried upload (the uploader gave up, the user tried again) asks for the same version filename, and a
+	 * second job would share the first one's work directory and output files.
+	 *
+	 * @return TranscodingJob|null
+	 */
+	public static function findReusableJob($versionFilename) {
+
+		$db = db();
+
+		$sql = "SELECT " . self::SELECT_WITH_AGES . "
+			FROM transcoding_jobs
+			WHERE version_filename = '" . original_to_query($versionFilename) . "'
+			AND (transcode_finished IS NULL OR transcode_fail_code IS NULL)
+			ORDER BY id DESC
+			LIMIT 1";
+
+		if( !$result = $db->sql_query($sql) ) throw new QueryException("Error selecting from transcoding_jobs", $sql);
+
+		if( $row = $db->sql_fetchrow($result) ) return new self($row);
+
+		return null;
 
 	}
 
@@ -1785,7 +1819,10 @@ class TranscodingJob {
 
 				}
 
-				$this->markFailed($execResult, [ 'dockerOutput' => $dockerOutput, 'containerState' => $state ], 'ffmpeg exited without finishing');
+				// getPercentComplete() reads only the container's stdout (the progress lines); ffmpeg's own error is on stderr
+				exec("sudo /home/dtcdn/scripts/docker-logs.sh -c " . escapeshellarg($this->dockerContainerId) . " -n 30 2>&1", $logTail);
+
+				$this->markFailed($execResult, [ 'dockerOutput' => $dockerOutput, 'logTail' => $logTail, 'containerState' => $state ], 'ffmpeg exited without finishing');
 
 				self::startWaitingJobs();
 
@@ -1800,6 +1837,17 @@ class TranscodingJob {
 			$hubResponseDataArray = $this->publishOutput();
 
 		} catch( Throwable $e ) {
+
+			if( self::isPermanentHubRefusal($e) ) {
+
+				// The hub has deleted the source (its orphan rule), so this version can never be registered
+				$this->failPublished('source_gone', $e->getMessage(), 'hub no longer has the source: ' . $e->getMessage());
+
+				self::startWaitingJobs();
+
+				return false;
+
+			}
 
 			// Part of the output may already be in www/; the job stays active and the sweep retries from here each minute
 			$this->recordFinishError($e);
@@ -2043,6 +2091,35 @@ class TranscodingJob {
 
 	}
 
+	/** The hub's answer when the source of this version no longer exists there; retrying can't change it */
+	protected static function isPermanentHubRefusal(Throwable $e) {
+
+		return strpos($e->getMessage(), 'Could not find source video') !== false;
+
+	}
+
+	/**
+	 * Fails a job whose output publishOutput() has already put into www/ and removes those files, which no registered
+	 * version points at. The work directory goes with deleteExpiredJobs() as for any failed job.
+	 */
+	public function failPublished($failCode, $failOutput, $message) {
+
+		if( !$this->markFailed($failCode, $failOutput, $message) ) return false;
+
+		try {
+
+			CDNClient::deleteVideoVersion($this->versionFilename, $this->isHls() ? 'hls' : 'mp4');
+
+		} catch( Throwable $e ) {
+
+			Logger::logEvent('transcode_published_delete_failed', [ 'message' => $e->getMessage(), 'exception' => $e, 'data' => [ 'jobId' => $this->id ] ]);
+
+		}
+
+		return true;
+
+	}
+
 	/** True when the job ended without producing a version */
 	public function hasFailed() {
 
@@ -2269,10 +2346,12 @@ class TranscodingJob {
 
 					if( $job->markFailed('container_missing', null, 'container no longer exists') ) $report['failed']++;
 
-				} else if( $expired ) {
+				} else if( $job->data['transcode_fail_code'] !== null && $job->ageMinutes() >= self::TRANSCODE_FINISH_RETRY_MAX_MINUTES ) {
 
-					// Exited, but every finish attempt has failed for this long
-					if( $job->markFailed('finish_timeout', json_decode($job->data['transcode_fail_output'], true), "not finished $activeMinutes min after starting") ) $report['failed']++;
+					// Exited, but every finish attempt has failed, and the job is too old for the hub to still want the
+					// version. (An exited job with no attempt yet is finished below however old it is; the hub's refusal
+					// of a deleted source then ends it.)
+					if( $job->failPublished('finish_timeout', json_decode($job->data['transcode_fail_output'], true), 'finish still failing ' . $job->ageMinutes() . ' min after creation') ) $report['failed']++;
 
 				} else {
 
@@ -2537,15 +2616,27 @@ class TranscodingJob {
 
 			$job = new self($row);
 
-			if( !$job->deleteInProgressFolder() && is_dir($job->inProgressDir()) ) {
+			try {
+
+				$deleted = $job->deleteInProgressFolder();
+
+			} catch( Throwable $e ) {
+
+				$deleted = false; // e.g. a directory this user can't open
+
+			}
+
+			if( !$deleted && is_dir($job->inProgressDir()) ) {
 
 				// The row still goes, so this is logged once rather than retried every minute
 				Logger::logEvent('transcode_job_dir_delete_failed', [
-					'message' => 'Could not delete the work directory; remove it by hand',
+					'message' => 'Could not delete the work directory; remove it by hand' . (isset($e) ? ': ' . $e->getMessage() : ''),
 					'data' => [ 'jobId' => $job->id, 'dir' => $job->inProgressDir() ]
 				]);
 
 			}
+
+			unset($e);
 
 			$deleteIds[] = (int)$job->id;
 

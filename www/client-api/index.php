@@ -182,8 +182,11 @@ switch( $action ) {
 
 			} else if( $job->isStale() ) {
 
-				// Waiting for a slot or for its finish for too long (the minute sweep will end it one way or the other):
-				// an error now rather than a bar the user watches forever
+				// Waiting for a slot or for its finish for too long: an error now rather than a bar the user watches forever.
+				// A job still waiting is dropped (nobody is waiting for it any more; a retry reuses a running job, not a
+				// waiting one); one whose finish is being retried keeps its output and the sweep decides.
+				if( !$job->transcodeStarted ) $job->markFailed('abandoned', null, 'reported stale to the uploader while waiting ' . $job->ageMinutes() . ' min', true);
+
 				AjaxResponse::returnError("The video is taking too long to process. Please try again later.");
 
 			} else if( !$job->transcodeStarted ) {
@@ -406,6 +409,15 @@ switch( $action ) {
 					$probeResult, $fileSizeBytes, $maxSizeBytes, $targetWidth, $targetHeight, $targetBitRate, $hlsByteSizeThreshold,
 					$constrainWidth, $constrainHeight, $passThroughVideo, $saveAsHls
 				);
+
+				// A job for this version may already be running or done (the uploader gave up and the user tried again):
+				// report it rather than start a second one into the same work directory
+				if( $existingJob = TranscodingJob::findReusableJob($versionFilename) ) {
+
+					$progressTokens[] = $existingJob->progressToken;
+					continue;
+
+				}
 
 				// Start new job
 				$tcJob = TranscodingJob::create($sourceFilename, $sourceIsNew, $originalExtension, $fileSizeBytes, $duration, $versionFilename, $targetWidth, $targetHeight, new TranscodingJobSettings(

@@ -313,6 +313,15 @@ switch( $payload->action ) {
 				$constrainWidth, $constrainHeight, $passThroughVideo, $saveAsHls
 			);
 
+			// A job for this version may already be running or done (a retried upload): report it rather than start a
+			// second one into the same work directory
+			if( $existingJob = TranscodingJob::findReusableJob($versionFilename) ) {
+
+				$progressTokens[] = $existingJob->progressToken;
+				continue;
+
+			}
+
 			// Start new job
 			$tcJob = TranscodingJob::create($sourceFilename, $sourceIsNew, $originalExtension, $fileSizeBytes, $duration, $versionFilename, $versionWidth, $versionHeight, new TranscodingJobSettings(
 				$targetBitRate,

@@ -20,8 +20,16 @@ ServerStatus::set('disk_free_bytes', $diskFreeBytes );
 ServerStatus::set('disk_free_pct', round($diskFreePct, 4) );
 
 
-// Delete expired transcoding jobs
-TranscodingJob::deleteExpiredJobs();
+// Delete expired transcoding jobs (a failure here must not stop the sweep below)
+try {
+
+	TranscodingJob::deleteExpiredJobs();
+
+} catch( Throwable $e ) {
+
+	Logger::logEvent('transcode_expire_error', [ 'message' => $e->getMessage(), 'exception' => $e ]);
+
+}
 
 // Finish, fail or start the transcoding jobs nothing else will (a die event the daemon missed, a finish that failed
 // part-way, a job waiting for a slot), and re-queue cloud uploads that never finished
