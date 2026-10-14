@@ -87,7 +87,7 @@ port_speed					X Gbit
 # 1. Before the pull: the ffmpeg container runs as the dtcdn user from this version on. Check that the image starts
 #    that way and that its progress lines reach docker logs, as production reads them (detached, root's docker; a
 #    failure here would fail every upload the moment the pull lands). Expect a progress=end line:
-#   cid=$(sudo docker run -d --user $(id -u dtcdn):$(id -g dtcdn) dliebner/ffmpeg-entrydefault ffmpeg -y -nostdin -f lavfi -i testsrc=d=1 -progress /dev/stdout -f null -); sleep 3; sudo docker logs $cid | grep progress=end; sudo docker rm $cid
+#   cid=$(sudo docker run -d --user $(id -u dtcdn):$(id -g dtcdn) --network none --cap-drop ALL --security-opt no-new-privileges dliebner/ffmpeg-entrydefault ffmpeg -y -nostdin -f lavfi -i testsrc=d=1 -progress /dev/stdout -f null -); sleep 3; sudo docker logs $cid | grep progress=end; sudo docker rm $cid
 #
 #    The pull itself. install.sh ran chmod +x on the scripts, which git shows as mode-only changes (" M"), and
 #    the 2026-10 commit sets those same modes, so the pull refuses to overwrite them: put the modes back first.
@@ -103,6 +103,9 @@ visudo -cf dtcdn-sudoers && sudo install -m 0440 dtcdn-sudoers /etc/sudoers.d/dt
 sudo mkdir -p /var/log/dtcdn && sudo chown dtcdn:dtcdn /var/log/dtcdn && sudo chmod 0750 /var/log/dtcdn
 sudo cp dtcdn-cron /etc/cron.d/                                                               # output now goes to /var/log/dtcdn/cron-*.log
 sudo cp dtcdn-logrotate /etc/logrotate.d/dtcdn
+# the prune cron now only removes containers carrying this install's label; the ones started before this version
+# have none, so remove the stopped ones once by hand (only this image's, not other services' containers):
+sudo docker ps -aq --filter status=exited --filter ancestor=dliebner/ffmpeg-entrydefault | xargs -r sudo docker rm
 sudo cp dtcdn-docker-events.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart dtcdn-docker-events
 systemctl status dtcdn-docker-events --no-pager | head -5
 

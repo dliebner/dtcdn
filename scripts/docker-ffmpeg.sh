@@ -144,7 +144,7 @@ fi
 # Change the ownership of the directory to 'dtcdn' user
 dtcdnUid=$(id -u dtcdn)
 dtcdnGid=$(id -g dtcdn)
-chown -R "$dtcdnUid":"$dtcdnGid" "$dir"
+chown -R -- "$dtcdnUid":"$dtcdnGid" "${dir%/}"   # no trailing slash: chown -R doesn't follow a symlink named on the command line
 
 # Run the docker container for ffmpeg encoding with the collected parameters. It runs as the dtcdn user (since
 # 2026-10; root before), so a process in the container has no root on the host side of the mount and the output it

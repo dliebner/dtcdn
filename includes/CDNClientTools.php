@@ -1944,7 +1944,8 @@ class TranscodingJob {
 
 		foreach( $files as $file ) {
 
-			if( $file->isLink() ) continue;
+			// No links, and no dotfiles: a planted .htaccess would land beside the media and could re-enable PHP there
+			if( $file->isLink() || $file->getFilename()[0] === '.' ) continue;
 
 			$filePath = $file->getRealPath();
 			$relativePath = substr($filePath, strlen($basePath) + 1);
