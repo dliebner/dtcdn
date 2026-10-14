@@ -1515,7 +1515,9 @@ class TranscodingJob {
 	/**
 	 * The job already producing this version, if there is one: unfinished, or finished with its version and not yet
 	 * expired. A retried upload (the uploader gave up, the user tried again) asks for the same version filename, and a
-	 * second job would share the first one's work directory and output files.
+	 * second job would share the first one's work directory and output files. A job that has waited for a slot past
+	 * TRANSCODE_STALE_MINUTES is abandoned here instead of handed out, since the next progress poll would abandon it anyway
+	 * and fail the retry; the caller then creates a fresh row.
 	 *
 	 * @return TranscodingJob|null
 	 */
@@ -1532,9 +1534,19 @@ class TranscodingJob {
 
 		if( !$result = $db->sql_query($sql) ) throw new QueryException("Error selecting from transcoding_jobs", $sql);
 
-		if( $row = $db->sql_fetchrow($result) ) return new self($row);
+		if( !$row = $db->sql_fetchrow($result) ) return null;
 
-		return null;
+		$job = new self($row);
+
+		if( !$job->transcodeStarted && !$job->transcodeFinished && $job->ageMinutes() >= self::TRANSCODE_STALE_MINUTES ) {
+
+			$job->markFailed('abandoned', null, 'stale waiting job replaced by a retried upload after ' . $job->ageMinutes() . ' min', true);
+
+			return null;
+
+		}
+
+		return $job;
 
 	}
 
@@ -1822,7 +1834,7 @@ class TranscodingJob {
 				// getPercentComplete() reads only the container's stdout (the progress lines); ffmpeg's own error is on stderr
 				exec("sudo /home/dtcdn/scripts/docker-logs.sh -c " . escapeshellarg($this->dockerContainerId) . " -n 30 2>&1", $logTail);
 
-				$this->markFailed($execResult, [ 'dockerOutput' => $dockerOutput, 'logTail' => $logTail, 'containerState' => $state ], 'ffmpeg exited without finishing');
+				$this->markFailed('ffmpeg_failed', [ 'exitCode' => $state['exitCode'] ?? null, 'dockerLogsResult' => $execResult, 'dockerOutput' => $dockerOutput, 'logTail' => $logTail, 'containerState' => $state ], 'ffmpeg exited without finishing');
 
 				self::startWaitingJobs();
 
@@ -2295,6 +2307,31 @@ class TranscodingJob {
 
 			try {
 
+				if( $job->data['transcode_fail_code'] !== null ) {
+
+					// A recorded finish failure. Its container has exited (the code is only written after that check), so
+					// retry without asking docker: the retry then doesn't depend on docker-container.sh's sudo rule, which a
+					// server that pulled this code may not have installed yet. finishTranscodeLocked() re-reads the log.
+					if( $job->ageMinutes() >= self::TRANSCODE_FINISH_RETRY_MAX_MINUTES ) {
+
+						// Too old for the hub to still want the version. The published files stay: the hub may have
+						// registered the version on an attempt whose response was lost, and its orphan rule removes an
+						// unused one.
+						if( $job->markFailed('finish_timeout', json_decode($job->data['transcode_fail_output'], true), 'finish still failing ' . $job->ageMinutes() . ' min after creation') ) $report['failed']++;
+
+					} else {
+
+						$result = $job->finishTranscode();
+
+						if( $result === true ) $report['finished']++;
+						else if( $result === false ) $report['retried']++;
+
+					}
+
+					continue;
+
+				}
+
 				if( !$job->dockerContainerId ) {
 
 					// Claimed but no container recorded. For a few seconds that is startTranscode() between its claim and
@@ -2351,16 +2388,10 @@ class TranscodingJob {
 
 					if( $job->markFailed('container_missing', null, 'container no longer exists') ) $report['failed']++;
 
-				} else if( $job->data['transcode_fail_code'] !== null && $job->ageMinutes() >= self::TRANSCODE_FINISH_RETRY_MAX_MINUTES ) {
-
-					// Exited, but every finish attempt has failed, and the job is too old for the hub to still want the
-					// version. (An exited job with no attempt yet is finished below however old it is; the hub's refusal
-					// of a deleted source then ends it.) The published files stay: the hub may have registered the version
-					// on an attempt whose response was lost, and its orphan rule removes an unused one.
-					if( $job->markFailed('finish_timeout', json_decode($job->data['transcode_fail_output'], true), 'finish still failing ' . $job->ageMinutes() . ' min after creation') ) $report['failed']++;
-
 				} else {
 
+					// Exited with no finish attempt yet (the die handler missed it): finished however old it is; the hub's
+					// refusal of a deleted source then ends it
 					$result = $job->finishTranscode();
 
 					if( $result === true ) $report['finished']++;

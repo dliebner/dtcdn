@@ -84,7 +84,11 @@ port_speed					X Gbit
 # Updating a server that was installed before 2026-10 (the install scripts do all of this on a fresh box)
 #
 
-# 1. The pull itself. install.sh ran chmod +x on the scripts, which git shows as mode-only changes (" M"), and
+# 1. Before the pull: the ffmpeg container runs as the dtcdn user from this version on. Check that the image starts
+#    that way and still prints progress lines (a failure here would fail every upload the moment the pull lands):
+#   sudo -u dtcdn docker run --rm --user $(id -u dtcdn):$(id -g dtcdn) dliebner/ffmpeg-entrydefault ffmpeg -f lavfi -i testsrc=d=1 -progress /dev/stdout -f null -
+#
+#    The pull itself. install.sh ran chmod +x on the scripts, which git shows as mode-only changes (" M"), and
 #    the 2026-10 commit sets those same modes, so the pull refuses to overwrite them: put the modes back first.
 cd /home/dtcdn
 git status --short            # expect only mode changes under daemon/, scripts/, install/, devel/cpp-redis-pipe/build.sh
@@ -110,10 +114,6 @@ systemctl status dtcdn-docker-events --no-pager | head -5
 # itself):
 #   sudo ls -la /home/dtcdn/transcoding/
 #   sudo rm -r /home/dtcdn/transcoding/<version filename>
-
-# Before the first upload after the pull: the ffmpeg container now runs as the dtcdn user. Check that the image
-# starts that way and still prints progress lines (a failure here would fail every upload at once):
-#   sudo -u dtcdn docker run --rm --user $(id -u dtcdn):$(id -g dtcdn) dliebner/ffmpeg-entrydefault ffmpeg -f lavfi -i testsrc=d=1 -progress /dev/stdout -f null -
 
 # Check the pipeline's state at any time (and sweep it now with --fix):
 #   sudo -u dtcdn /usr/bin/php7.4 /home/dtcdn/scripts/jobs-status.php

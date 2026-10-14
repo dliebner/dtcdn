@@ -132,7 +132,10 @@ chown -R "$dtcdnUid":"$dtcdnGid" "$dir"
 # Run the docker container for ffmpeg encoding with the collected parameters. It runs as the dtcdn user (since
 # 2026-10; root before), so a process in the container has no root on the host side of the mount and the output it
 # writes belongs to dtcdn like the directory it lands in.
-docker run "${dirParams[@]}" --user "$dtcdnUid":"$dtcdnGid" -d dliebner/ffmpeg-entrydefault ffmpeg -hwaccel none \
+# -y -nostdin: a retried job writes into the same out/ directory as the job before it, which may have left a partial
+# file (killed or crashed mid-encode); without -y ffmpeg asks whether to overwrite, reads EOF from the detached
+# container's stdin and exits 1, failing every retry
+docker run "${dirParams[@]}" --user "$dtcdnUid":"$dtcdnGid" -d dliebner/ffmpeg-entrydefault ffmpeg -hwaccel none -y -nostdin \
 -progress /dev/stdout \
 -i "$inFile" \
 -map 0:v:0 -map 0:a:0? \

@@ -214,10 +214,10 @@ switch( $action ) {
 
 				if( $pctComplete === false ) {
 
-					AjaxResponse::returnError("There was an error transcoding the video.", debugEnabled() ? [
-						'execResult' => $execResult,
-						'dockerOutput' => $dockerOutput,
-					] : null);
+					// The log couldn't be read this time (docker busy or restarting). The job itself is decided by the die
+					// handler or the sweep, which fail it if the container is gone; until then report no progress rather
+					// than end the upload over one failed read.
+					$pctComplete = 0;
 
 				}
 
@@ -423,8 +423,30 @@ switch( $action ) {
 				);
 
 				// A job for this version may already be running or done (the uploader gave up and the user tried again):
-				// report it rather than start a second one into the same work directory
+				// report it rather than start a second one into the same work directory. One still waiting for its source
+				// (a hub-initiated job whose cloud download hasn't happened) gets this upload as its source.
 				if( $existingJob = TranscodingJob::findReusableJob($versionFilename) ) {
+
+					if( !$existingJob->transcodeStarted && !$existingJob->transcodeFinished && !$existingJob->sourceVideoExistsOnDisk() ) {
+
+						$existingJob->createInProgressDir();
+
+						if( !$movedUploadedFile ) {
+
+							if( !$existingJob->moveUploadedFile($tmpFile) ) AjaxResponse::returnError("Error preparing transcoding job.");
+
+							$movedUploadedFile = $existingJob;
+
+						} else {
+
+							copy($movedUploadedFile->inProgressPath(), $existingJob->inProgressPath());
+
+						}
+
+						$existingJob->setTranscodeReady();
+						$existingJob->startTranscode();
+
+					}
 
 					$progressTokens[] = $existingJob->progressToken;
 					continue;
