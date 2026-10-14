@@ -1775,7 +1775,9 @@ class TranscodingJob {
 
 			if( !$exitedCleanly ) {
 
-				if( $pctComplete === false && $state && $state['status'] !== 'missing' ) {
+				// Only when docker logs itself failed ($execResult) on a container that still exists is this a read error
+				// to retry; a readable log with no progress line is ffmpeg failing before its first progress block
+				if( $execResult !== 0 && (!$state || $state['status'] !== 'missing') ) {
 
 					$this->recordFinishError(new GeneralException('Could not read the container log: ' . $dockerOutput));
 
@@ -2345,11 +2347,14 @@ class TranscodingJob {
 
 		if( !$jobIds ) return;
 
-		$column = $type === 'src' ? 'src_cloud_upload_started' : 'cloud_upload_started';
+		$prefix = $type === 'src' ? 'src_' : '';
 		$minutesAgo = self::CLOUD_UPLOAD_STALE_MINUTES - self::CLOUD_UPLOAD_RETRY_MINUTES;
 
+		// _finished cleared too: a version whose own file went up but whose poster failed was just marked finished, and
+		// resetStaleCloudUploads() only re-queues an unfinished row
 		$sql = "UPDATE transcoding_jobs
-			SET $column = NOW() - INTERVAL " . (int)$minutesAgo . " MINUTE
+			SET {$prefix}cloud_upload_started = NOW() - INTERVAL " . (int)$minutesAgo . " MINUTE,
+				{$prefix}cloud_upload_finished = NULL
 			WHERE id IN (" . implode(",", CDNTools::intArray($jobIds)) . ")";
 
 		if( !db()->sql_query($sql) ) throw new QueryException("Error updating", $sql);
@@ -2410,13 +2415,16 @@ class TranscodingJob {
 
 	}
 
+	/** Claims the job for this process. False when another process claimed it first, or it has since been finished or failed */
 	public function setTranscodeStarted() {
 
 		$db = db();
 
 		$sql = "UPDATE transcoding_jobs
-			SET transcode_started = CASE WHEN transcode_started IS NULL THEN NOW() ELSE transcode_started END
-			WHERE id = " . (int)$this->id;
+			SET transcode_started = NOW()
+			WHERE id = " . (int)$this->id . "
+			AND transcode_started IS NULL
+			AND transcode_finished IS NULL";
 
 		if( !$db->sql_query($sql) ) throw new QueryException("Error updating", $sql);
 
