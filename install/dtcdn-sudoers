@@ -2,5 +2,5 @@
 www-data, dtcdn ALL=NOPASSWD: /home/dtcdn/scripts/docker-ffprobe.sh
 www-data, dtcdn ALL=NOPASSWD: /home/dtcdn/scripts/docker-ffmpeg.sh
 www-data, dtcdn ALL=NOPASSWD: /home/dtcdn/scripts/docker-logs.sh
-www-data, dtcdn ALL=NOPASSWD: /home/dtcdn/scripts/docker-container.sh
+dtcdn ALL=NOPASSWD: /home/dtcdn/scripts/docker-container.sh
 www-data, dtcdn ALL=NOPASSWD: /home/dtcdn/scripts/git-pull.sh

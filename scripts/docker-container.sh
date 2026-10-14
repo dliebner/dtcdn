@@ -21,6 +21,12 @@ if [ -z "$containerId" ]; then
 	exit 1
 fi
 
+# Only a container id (docker prints the short 12 or full 64 hex form), never a name or an option
+if ! [[ "$containerId" =~ ^[0-9a-f]{12,64}$ ]]; then
+	echo "Invalid container ID -c"
+	exit 1
+fi
+
 case "$action" in
 	inspect)
 		docker inspect --type container --format '{{.State.Status}} {{.State.ExitCode}} {{.State.FinishedAt}}' "$containerId"

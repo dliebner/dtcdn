@@ -241,15 +241,17 @@ class CDNClient {
 		$response = curl_exec($ch);
 		$errno = curl_errno($ch);
 		$err = curl_error($ch);
+		$sentAnything = curl_getinfo($ch, CURLINFO_PRETRANSFER_TIME) > 0; // 0 until the request has been handed to the hub
 		
 		//close connection
 		curl_close($ch);
 		
 		if( $errno ) {
 
-			// Nothing reached the hub, so a second try is safe: a dropped DNS answer or a connection the proxy refused once
-			// (CURLE_COULDNT_RESOLVE_HOST, CURLE_COULDNT_CONNECT, CURLE_SSL_CONNECT_ERROR)
-			if( !$isRetry && in_array($errno, [6, 7, 35], true) ) {
+			// Nothing reached the hub, so a second try is safe: a dropped or slow DNS answer, a connection refused or
+			// timing out (CURLE_COULDNT_RESOLVE_HOST, CURLE_COULDNT_CONNECT, CURLE_SSL_CONNECT_ERROR, and
+			// CURLE_OPERATION_TIMEDOUT before anything was sent, which is what "Resolving timed out" reports as)
+			if( !$isRetry && (in_array($errno, [6, 7, 35], true) || ($errno === 28 && !$sentAnything)) ) {
 
 				sleep(self::HUB_RETRY_DELAY_SECONDS);
 
@@ -1160,8 +1162,12 @@ class TranscodingJob {
 	const TRANSCODE_MAX_ACTIVE_MINUTES = 120;
 	/** upload-progress reports an error for a job this old that hasn't produced its version, rather than a bar that never ends */
 	const TRANSCODE_STALE_MINUTES = 15;
+	/** A claim (transcode_started) with no container recorded yet is startTranscode() mid-run for this long; older ones are released */
+	const TRANSCODE_CLAIM_GRACE_MINUTES = 5;
 	/** A cloud upload marked started this long ago and never finished is re-queued by the minute sweep */
 	const CLOUD_UPLOAD_STALE_MINUTES = 120;
+	/** A cloud upload that failed is tried again after this long, not on the queue's next one-second loop */
+	const CLOUD_UPLOAD_RETRY_MINUTES = 10;
 
 	/** Row columns plus the ages the sweep and upload-progress decide on, computed by MySQL so PHP's time zone doesn't matter */
 	const SELECT_WITH_AGES = "*,
@@ -1498,6 +1504,32 @@ class TranscodingJob {
 
 	}
 
+	/** @return TranscodingJob[] jobs created over $minutes ago that never became ready to transcode */
+	public static function getNeverReadyJobs($minutes) {
+
+		$db = db();
+
+		$sql = "SELECT " . self::SELECT_WITH_AGES . "
+			FROM transcoding_jobs
+			WHERE transcode_ready = 0
+			AND transcode_finished IS NULL
+			AND job_started < NOW() - INTERVAL " . (int)$minutes . " MINUTE
+			ORDER BY id";
+
+		if( !$result = $db->sql_query($sql) ) throw new QueryException("Error selecting from transcoding_jobs", $sql);
+
+		$jobs = [];
+
+		while( $row = $db->sql_fetchrow($result) ) {
+
+			$jobs[] = new self($row);
+
+		}
+
+		return $jobs;
+
+	}
+
 	/** @return TranscodingJob[] jobs that hold a transcode slot (started, not finished) */
 	public static function getActiveTranscodeJobs() {
 
@@ -1583,7 +1615,12 @@ class TranscodingJob {
 		if( !$this->setTranscodeStarted() ) return;
 
 		// Required
-		if( !$dir = realpath($this->inProgressDir()) ) throw new Exception("Error getting absolute path");
+		if( !$dir = realpath($this->inProgressDir()) ) {
+
+			$this->unsetTranscodeStarted();
+			throw new Exception("Error getting absolute path");
+
+		}
 		$dir .= '/';
 		$inFile = $this->srcFilename;
 		$outFile = CDNClient::DIR_TRANSCODE_OUTPUT . (
@@ -1699,6 +1736,15 @@ class TranscodingJob {
 
 		try {
 
+			// The row this object was built from may predate another process's finish (the sweep reads its rows once, then
+			// works through them while the die handler runs); re-read it now that the lock is held
+			if( !$fresh = self::getById($this->id) ) return null;
+
+			if( $fresh->transcodeFinished ) return null;
+
+			$this->dockerContainerId = $fresh->dockerContainerId;
+			$this->data = $fresh->data + $this->data;
+
 			return $this->finishTranscodeLocked();
 
 		} finally {
@@ -1717,18 +1763,33 @@ class TranscodingJob {
 
 		if( !$transcodeIsFinished ) {
 
-			// No progress=end in the container's log: ffmpeg failed, or docker no longer has the container. Until 2026-10
-			// this only recorded the output, so the job stayed active, held one of the transcode_job_limit slots for good
-			// and the uploader polled it at 0%.
+			// No progress=end in the container's log. Until 2026-10 this only recorded the output, so the job stayed active,
+			// held one of the transcode_job_limit slots for good and the uploader polled it at 0%. The container's exit
+			// status decides: a clean exit without the line in the last 70 log lines is still a finished encode (the probe
+			// in publishOutput() checks the output), a log that couldn't be read is retried, anything else failed.
 			$state = $this->containerState();
 
-			if( $state && $state['status'] === 'running' ) return false; // still encoding; the sweep asked too early
+			if( $state && self::containerIsLive($state) ) return false; // still encoding; the sweep asked too early
 
-			$this->markFailed($execResult, [ 'dockerOutput' => $dockerOutput, 'containerState' => $state ], 'ffmpeg exited without finishing');
+			$exitedCleanly = $state && $state['status'] === 'exited' && $state['exitCode'] === 0;
 
-			self::startWaitingJobs();
+			if( !$exitedCleanly ) {
 
-			return false;
+				if( $pctComplete === false && $state && $state['status'] !== 'missing' ) {
+
+					$this->recordFinishError(new GeneralException('Could not read the container log: ' . $dockerOutput));
+
+					return false;
+
+				}
+
+				$this->markFailed($execResult, [ 'dockerOutput' => $dockerOutput, 'containerState' => $state ], 'ffmpeg exited without finishing');
+
+				self::startWaitingJobs();
+
+				return false;
+
+			}
 
 		}
 
@@ -1736,7 +1797,7 @@ class TranscodingJob {
 
 			$hubResponseDataArray = $this->publishOutput();
 
-		} catch( Exception $e ) {
+		} catch( Throwable $e ) {
 
 			// Part of the output may already be in www/; the job stays active and the sweep retries from here each minute
 			$this->recordFinishError($e);
@@ -1917,17 +1978,22 @@ class TranscodingJob {
 	 * started-and-not-finished), and transcode_fail_code marks it as having produced no version: upload-progress reports
 	 * an error, the cloud upload queue skips it, and deleteExpiredJobs() removes it an hour later.
 	 */
-	public function markFailed($failCode, $failOutput, $message) {
+	public function markFailed($failCode, $failOutput, $message, $onlyIfUnstarted = false) {
 
 		$db = db();
 
+		// Only an unfinished row: another process may have finished it since this one was read
 		$sql = "UPDATE transcoding_jobs
 			SET transcode_finished = NOW(),
 				transcode_fail_code = '" . original_to_query(self::jsonColumn($failCode)) . "',
 				transcode_fail_output = '" . original_to_query(self::jsonColumn($failOutput)) . "'
-			WHERE id = " . (int)$this->id;
+			WHERE id = " . (int)$this->id . "
+			AND transcode_finished IS NULL" . ($onlyIfUnstarted ? "
+			AND transcode_started IS NULL" : "");
 
 		if( !$db->sql_query($sql) ) throw new QueryException("Error updating", $sql);
+
+		if( !$db->sql_affectedrows() ) return false;
 
 		$this->transcodeFinished = new DateTime();
 		$this->data['transcode_fail_code'] = self::jsonColumn($failCode);
@@ -1944,19 +2010,24 @@ class TranscodingJob {
 			]
 		]);
 
+		return true;
+
 	}
 
 	/** Records why a finish attempt failed after ffmpeg had succeeded, without ending the job: the sweep retries it */
-	protected function recordFinishError(Exception $e) {
+	protected function recordFinishError(Throwable $e) {
 
 		$db = db();
 
 		$sql = "UPDATE transcoding_jobs
 			SET transcode_fail_code = '" . original_to_query(self::jsonColumn('finish_failed')) . "',
 				transcode_fail_output = '" . original_to_query(self::jsonColumn($e->getMessage())) . "'
-			WHERE id = " . (int)$this->id;
+			WHERE id = " . (int)$this->id . "
+			AND transcode_finished IS NULL";
 
 		if( !$db->sql_query($sql) ) throw new QueryException("Error updating", $sql);
+
+		if( !$db->sql_affectedrows() ) return;
 
 		Logger::logEvent('transcode_finish_failed', [
 			'message' => 'Will retry from the minute sweep: ' . $e->getMessage(),
@@ -1984,10 +2055,23 @@ class TranscodingJob {
 
 	}
 
-	/** An unfinished job old enough that upload-progress should report an error instead of a bar */
+	/**
+	 * A job old enough that upload-progress should report an error instead of a bar: still waiting for a slot, or
+	 * encoded but with a finish attempt that failed (transcode_fail_code set while active). One that is encoding isn't
+	 * stale however long it waited first.
+	 */
 	public function isStale() {
 
-		return !$this->transcodeFinished && $this->ageMinutes() !== null && $this->ageMinutes() >= self::TRANSCODE_STALE_MINUTES;
+		if( $this->transcodeFinished || $this->ageMinutes() === null || $this->ageMinutes() < self::TRANSCODE_STALE_MINUTES ) return false;
+
+		return !$this->transcodeStarted || $this->data['transcode_fail_code'] !== null;
+
+	}
+
+	/** A container state in which ffmpeg may still be running */
+	protected static function containerIsLive(array $state) {
+
+		return in_array($state['status'], [ 'running', 'created', 'restarting', 'paused' ], true);
 
 	}
 
@@ -2039,15 +2123,16 @@ class TranscodingJob {
 
 		exec($cmd, $execOutput, $execResult);
 
-		$line = trim(implode(PHP_EOL, $execOutput ?: []));
+		$text = trim(implode(PHP_EOL, $execOutput ?: []));
 
-		if( $execResult === 0 && preg_match('/^(\w+) (-?\d+) (\S+)$/', $line, $matches) ) {
+		// Line by line: stderr is merged in, and sudo or docker may print a line of their own around the one we want
+		if( $execResult === 0 && preg_match('/^(\w+) (-?\d+) (\S+)$/m', $text, $matches) ) {
 
 			return [ 'status' => $matches[1], 'exitCode' => (int)$matches[2], 'finishedAt' => $matches[3] ];
 
 		}
 
-		if( stripos($line, 'No such') !== false ) return [ 'status' => 'missing' ];
+		if( stripos($text, 'No such') !== false ) return [ 'status' => 'missing' ];
 
 		return null;
 
@@ -2128,14 +2213,15 @@ class TranscodingJob {
 
 				if( !$job->dockerContainerId ) {
 
-					// Claimed but docker run never reported a container: a crash between the two writes. startTranscode()
-					// releases the claim itself on a failed run, so this is rare; release it so startWaitingJobs() retries.
+					// Claimed but no container recorded. For a few seconds that is startTranscode() between its claim and
+					// its docker run (another process started the job), so leave a young claim alone; an old one is a
+					// crash between the two writes (startTranscode() releases the claim itself on a failed run), released
+					// here so startWaitingJobs() retries it.
 					if( $expired ) {
 
-						$job->markFailed('no_container', null, "claimed with no container for $activeMinutes min");
-						$report['failed']++;
+						if( $job->markFailed('no_container', null, "claimed with no container for $activeMinutes min") ) $report['failed']++;
 
-					} else {
+					} else if( $activeMinutes >= self::TRANSCODE_CLAIM_GRACE_MINUTES ) {
 
 						$job->unsetTranscodeStarted();
 						$report['retried']++;
@@ -2150,16 +2236,26 @@ class TranscodingJob {
 
 				if( $state === null ) {
 
-					$report['unknown']++;
-					$unknownStateOutput = $inspectOutput;
+					// Docker couldn't be asked (the sudo rule not installed, docker down). Such a job must still end
+					// eventually, or this is the incident again under another name.
+					if( $expired ) {
 
-				} else if( $state['status'] === 'running' || $state['status'] === 'created' || $state['status'] === 'restarting' || $state['status'] === 'paused' ) {
+						$job->killContainer();
+						if( $job->markFailed('state_unknown_timeout', $inspectOutput, "container state unreadable, active $activeMinutes min") ) $report['failed']++;
+
+					} else {
+
+						$report['unknown']++;
+						$unknownStateOutput = $inspectOutput;
+
+					}
+
+				} else if( self::containerIsLive($state) ) {
 
 					if( $expired ) {
 
 						$job->killContainer();
-						$job->markFailed('timeout', $state, "still running after $activeMinutes min; container killed");
-						$report['failed']++;
+						if( $job->markFailed('timeout', $state, "still running after $activeMinutes min; container killed") ) $report['failed']++;
 
 					} else {
 
@@ -2169,14 +2265,12 @@ class TranscodingJob {
 
 				} else if( $state['status'] === 'missing' ) {
 
-					$job->markFailed('container_missing', null, 'container no longer exists');
-					$report['failed']++;
+					if( $job->markFailed('container_missing', null, 'container no longer exists') ) $report['failed']++;
 
 				} else if( $expired ) {
 
 					// Exited, but every finish attempt has failed for this long
-					$job->markFailed('finish_timeout', json_decode($job->data['transcode_fail_output'], true), "not finished $activeMinutes min after starting");
-					$report['failed']++;
+					if( $job->markFailed('finish_timeout', json_decode($job->data['transcode_fail_output'], true), "not finished $activeMinutes min after starting") ) $report['failed']++;
 
 				} else {
 
@@ -2187,7 +2281,7 @@ class TranscodingJob {
 
 				}
 
-			} catch( Exception $e ) {
+			} catch( Throwable $e ) {
 
 				Logger::logEvent('transcode_sweep_error', [
 					'message' => $e->getMessage(),
@@ -2199,15 +2293,29 @@ class TranscodingJob {
 
 		}
 
-		// Waiting jobs that never got a slot (the hub forgets a source with no version after an hour anyway)
-		foreach( self::getUnstartedTranscodeJobs() as $job ) {
+		// Jobs that never got going: waiting for a slot, or never made ready (a source download that keeps failing, an
+		// upload that couldn't be moved). The hub forgets a source with no version after an hour anyway.
+		try {
 
-			if( $job->ageMinutes() >= self::TRANSCODE_MAX_ACTIVE_MINUTES ) {
+			foreach( self::getUnstartedTranscodeJobs() as $job ) {
 
-				$job->markFailed('never_started', null, 'waited ' . $job->ageMinutes() . ' min for a transcode slot');
-				$report['failed']++;
+				if( $job->ageMinutes() >= self::TRANSCODE_MAX_ACTIVE_MINUTES ) {
+
+					if( $job->markFailed('never_started', null, 'waited ' . $job->ageMinutes() . ' min for a transcode slot', true) ) $report['failed']++;
+
+				}
 
 			}
+
+			foreach( self::getNeverReadyJobs(self::TRANSCODE_MAX_ACTIVE_MINUTES) as $job ) {
+
+				if( $job->markFailed('never_ready', null, 'not ready to transcode ' . $job->ageMinutes() . ' min after creation', true) ) $report['failed']++;
+
+			}
+
+		} catch( Throwable $e ) {
+
+			Logger::logEvent('transcode_sweep_error', [ 'message' => $e->getMessage(), 'exception' => $e ]);
 
 		}
 
@@ -2223,6 +2331,50 @@ class TranscodingJob {
 		}
 
 		return $report;
+
+	}
+
+	/**
+	 * Pushes a failed upload's start mark back so resetStaleCloudUploads() re-queues it in CLOUD_UPLOAD_RETRY_MINUTES.
+	 * Clearing the mark at once would retry a file that always fails on the queue's next one-second loop, about sixty
+	 * times a minute, each with a log row, and a large one would fill every batch.
+	 *
+	 * @param string $type 'src' or 'version'
+	 */
+	public static function deferCloudUploadRetry($type, array $jobIds) {
+
+		if( !$jobIds ) return;
+
+		$column = $type === 'src' ? 'src_cloud_upload_started' : 'cloud_upload_started';
+		$minutesAgo = self::CLOUD_UPLOAD_STALE_MINUTES - self::CLOUD_UPLOAD_RETRY_MINUTES;
+
+		$sql = "UPDATE transcoding_jobs
+			SET $column = NOW() - INTERVAL " . (int)$minutesAgo . " MINUTE
+			WHERE id IN (" . implode(",", CDNTools::intArray($jobIds)) . ")";
+
+		if( !db()->sql_query($sql) ) throw new QueryException("Error updating", $sql);
+
+	}
+
+	/**
+	 * Marks an upload finished without uploading, for a file that no longer exists locally (the hub deleted the source
+	 * as an orphan before its upload ran). Nothing can be done for it, and the row can now expire.
+	 *
+	 * @param string $type 'src' or 'version'
+	 */
+	public static function abandonCloudUpload($type, array $jobIds) {
+
+		if( !$jobIds ) return;
+
+		$prefix = $type === 'src' ? 'src_' : '';
+
+		// Both marks: getCloudUploadJobs() selects on a null _started, so the job must leave that set too
+		$sql = "UPDATE transcoding_jobs
+			SET {$prefix}cloud_upload_started = NOW(),
+				{$prefix}cloud_upload_finished = NOW()
+			WHERE id IN (" . implode(",", CDNTools::intArray($jobIds)) . ")";
+
+		if( !db()->sql_query($sql) ) throw new QueryException("Error updating", $sql);
 
 	}
 

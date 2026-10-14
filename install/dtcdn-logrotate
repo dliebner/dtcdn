@@ -7,5 +7,6 @@
 	missingok
 	notifempty
 	su dtcdn dtcdn
-	create 0644 dtcdn dtcdn
+	# both the dtcdn crons and Apache (Logger's fallback files) append here; dtcdn is in the www-data group
+	create 0664 dtcdn www-data
 }

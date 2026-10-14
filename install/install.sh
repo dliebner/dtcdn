@@ -218,14 +218,16 @@ Cache=yes"
 if [ ! -f "$RESOLVED_DROPIN" ] || [ "$(cat "$RESOLVED_DROPIN")" != "$RESOLVED_CONF" ]; then
 	sudo mkdir -p /etc/systemd/resolved.conf.d
 	echo "$RESOLVED_CONF" | sudo tee "$RESOLVED_DROPIN" > /dev/null
-	sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-	sudo systemctl enable systemd-resolved
+	# resolved first, and only then point resolv.conf at its stub, so an image without resolved keeps its DNS
+	sudo systemctl enable --now systemd-resolved
 	sudo systemctl restart systemd-resolved
+	test -e /run/systemd/resolve/stub-resolv.conf
+	sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 fi
 
 # copy files
-sudo cp dtcdn-sudoers /etc/sudoers.d/
-sudo visudo -cf /etc/sudoers.d/dtcdn-sudoers
+visudo -cf dtcdn-sudoers # check before it is in place: a bad file there breaks sudo for the whole box
+sudo install -m 0440 dtcdn-sudoers /etc/sudoers.d/dtcdn-sudoers
 sudo cp dtcdn-cron /etc/cron.d/
 sudo cp dtcdn-docker-events.service /etc/systemd/system/
 sudo systemctl daemon-reload
