@@ -1543,9 +1543,10 @@ class TranscodingJob {
 
 		if( !$job->transcodeStarted && !$job->transcodeFinished && $job->ageMinutes() >= self::TRANSCODE_STALE_MINUTES ) {
 
-			$job->markFailed('abandoned', null, 'stale waiting job replaced by a retried upload after ' . $job->ageMinutes() . ' min', true);
+			if( $job->markFailed('abandoned', null, 'stale waiting job replaced by a retried upload after ' . $job->ageMinutes() . ' min', true) ) return null;
 
-			return null;
+			// A starter claimed it between the select and the abandon: it is encoding now, so reuse it
+			return self::getById($job->id) ?: null;
 
 		}
 
@@ -2366,17 +2367,12 @@ class TranscodingJob {
 					// eventually, or this is the incident again under another name.
 					if( $expired ) {
 
-						// Failed only once the container is known to be stopped: a job marked failed while ffmpeg still
-						// runs would share its out/ with a retry (-y lets both write)
-						if( $job->killContainer($killOutput) ) {
+						// The kill goes through the same sudo rule as the inspect, so it fails for the same reason; the job
+						// is failed regardless, or it would hold its slot for good (the sudo rule missing is far likelier
+						// than an encode still running after two hours). The record says whether the kill was confirmed.
+						$killed = $job->killContainer($killOutput);
 
-							if( $job->markFailed('state_unknown_timeout', $inspectOutput, "container state unreadable, active $activeMinutes min") ) $report['failed']++;
-
-						} else {
-
-							Logger::logEvent('transcode_kill_failed', [ 'message' => 'Could not kill the container of an expired job; left for the next sweep', 'data' => [ 'jobId' => $job->id, 'output' => $killOutput ] ]);
-
-						}
+						if( $job->markFailed('state_unknown_timeout', [ 'inspectOutput' => $inspectOutput, 'killed' => $killed, 'killOutput' => $killOutput ], "container state unreadable, active $activeMinutes min" . ($killed ? '; container killed' : '; kill not confirmed')) ) $report['failed']++;
 
 					} else {
 
