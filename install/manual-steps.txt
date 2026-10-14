@@ -79,3 +79,31 @@ service apache2 restart
 
 monthly_bandwidth_alloc		X TB
 port_speed					X Gbit
+
+#
+# Updating a server that was installed before 2026-10 (the install scripts do all of this on a fresh box)
+#
+
+# After the git pull, copy the files the pull can't install itself, then restart the die daemon:
+cd /home/dtcdn/install
+sudo cp dtcdn-sudoers /etc/sudoers.d/ && sudo visudo -cf /etc/sudoers.d/dtcdn-sudoers   # adds scripts/docker-container.sh
+sudo cp dtcdn-cron /etc/cron.d/                                                           # output now goes to logs/cron-*.log
+sudo cp dtcdn-logrotate /etc/logrotate.d/dtcdn
+sudo cp dtcdn-docker-events.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart dtcdn-docker-events
+systemctl status dtcdn-docker-events --no-pager | head -5
+
+# DNS: run the "RESOLVED_DROPIN" block from install.sh (it replaces a static /etc/resolv.conf a provider image may
+# have shipped, which has no cache and no fallback), then check:
+#   resolvectl status | head -20
+#   time getent hosts <the hub's hostname>     # a few ms when cached
+
+# Work directories ffmpeg wrote as root before 2026-10 can't be deleted by the cron (the container runs as dtcdn
+# now). minute.php logs transcode_job_dir_delete_failed once per job and removes the row; remove the directories by
+# hand, each by name:
+#   sudo ls -la /home/dtcdn/transcoding/
+#   sudo rm -r /home/dtcdn/transcoding/<version filename>
+
+# Check the pipeline's state at any time (and sweep it now with --fix):
+#   sudo -u dtcdn /usr/bin/php7.4 /home/dtcdn/scripts/jobs-status.php
+# A transcode is finished by the die daemon at once, or by cron/minute.php's sweep within a minute if the daemon
+# missed it; a job whose finish keeps failing is retried every minute and given up after 2 hours.

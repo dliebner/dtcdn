@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Parse the command-line options
-while getopts d:i:o:b:w:h:st:pmF:I:Q:W:H flag
+while getopts d:i:o:b:w:h:st:pmF:I:Q:W:H: flag # (-H took no value until 2026-10, so the poster height was never applied)
 do
 	case "${flag}" in
 		# Video transcoding args
@@ -125,10 +125,14 @@ if [ ! -z "$frameOutFile" ]; then
 fi
 
 # Change the ownership of the directory to 'dtcdn' user
-chown -R $(id -u dtcdn):$(id -g dtcdn) "$dir"
+dtcdnUid=$(id -u dtcdn)
+dtcdnGid=$(id -g dtcdn)
+chown -R "$dtcdnUid":"$dtcdnGid" "$dir"
 
-# Run the docker container for ffmpeg encoding with the collected parameters
-docker run "${dirParams[@]}" -d dliebner/ffmpeg-entrydefault ffmpeg -hwaccel none \
+# Run the docker container for ffmpeg encoding with the collected parameters. It runs as the dtcdn user, so the
+# output it writes into the mounted directory belongs to dtcdn and the cron can delete the directory when the job
+# expires (as root, which it was until 2026-10, the files were root-owned and the delete failed silently).
+docker run "${dirParams[@]}" --user "$dtcdnUid":"$dtcdnGid" -d dliebner/ffmpeg-entrydefault ffmpeg -hwaccel none \
 -progress /dev/stdout \
 -i "$inFile" \
 -map 0:v:0 -map 0:a:0? \

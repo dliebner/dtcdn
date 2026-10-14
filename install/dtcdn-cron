@@ -1,21 +1,23 @@
+# Each job appends its output to /home/dtcdn/logs/cron-<name>.log (rotated by install/dtcdn-logrotate); without the
+# redirect it went to cron's mail, where the upload queue's "Failed files" went unread.
 
 # Updates 30s bandwidth from Redis
-* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/update-30s-bw.php
+* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/update-30s-bw.php >> /home/dtcdn/logs/cron-update-30s-bw.log 2>&1
 
 # Maintains running total of bandwidth
-* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/add-bw-chunk.php
+* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/add-bw-chunk.php >> /home/dtcdn/logs/cron-add-bw-chunk.log 2>&1
 
 # Cloud uploads
-* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/cloud-upload-queue.php
+* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/cloud-upload-queue.php >> /home/dtcdn/logs/cron-cloud-upload-queue.log 2>&1
 
 # Second cron
-* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/second.php
+* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/second.php >> /home/dtcdn/logs/cron-second.log 2>&1
 
-# Minute cron
-* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/minute.php
+# Minute cron: disk space, expired jobs, the transcoding sweep
+* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/minute.php >> /home/dtcdn/logs/cron-minute.log 2>&1
 
 # Figures out what files we need to retrieve
-* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/handle-404s.php
+* * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/handle-404s.php >> /home/dtcdn/logs/cron-handle-404s.log 2>&1
 
 # Prune old stopped docker containers (timestamp is relative to when container was started)
-11 * * * * dtcdn docker container prune --filter "until=48h" -f
+11 * * * * dtcdn docker container prune --filter "until=48h" -f >> /home/dtcdn/logs/cron-docker-prune.log 2>&1

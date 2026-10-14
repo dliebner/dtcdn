@@ -153,21 +153,25 @@ while( time() - $maxWaitTime < $start ) {
 
 		if( $failedFiles = $pup->getAllFailedFiles() ) {
 
+			// A failed file is the option array given to addFileToUpload(). Clear the _started mark of each job whose
+			// upload failed so the next run retries it; a failed poster re-queues its version, which carries the posters.
+			// (Until 2026-10 this looped over the uploaded files and cleared the finished jobs' marks instead, so a failed
+			// upload was never retried and finished ones were uploaded again.)
 			$failedSrcCloudUploadJobIds = [];
 			$failedCloudUploadJobIds = [];
 
-			foreach( $uploadedFiles as $uploadedFileResult ) {
+			foreach( $failedFiles as $failedFile ) {
 
-				$type = $uploadedFileResult->originalFile['dtcdn:type'];
-				$jobId = $uploadedFileResult->originalFile['dtcdn:jobId'];
+				$type = $failedFile['dtcdn:type'];
+				$jobId = $failedFile['dtcdn:jobId'];
 
 				if( $type === 'src' ) $failedSrcCloudUploadJobIds[] = $jobId;
-				if( $type === 'version' ) $failedCloudUploadJobIds[] = $jobId;
+				if( $type === 'version' || $type === 'poster' ) $failedCloudUploadJobIds[] = $jobId;
 
 			}
 
-			TranscodingJob::unsetSrcCloudUploadStarted($finishedSrcCloudUploadJobIds);
-			TranscodingJob::unsetCloudUploadStarted($finishedCloudUploadJobIds);
+			TranscodingJob::unsetSrcCloudUploadStarted($failedSrcCloudUploadJobIds);
+			TranscodingJob::unsetCloudUploadStarted($failedCloudUploadJobIds);
 
 			Logger::logEvent('b2_failed_upload', [
 				'data' => [

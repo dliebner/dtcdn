@@ -1,0 +1,11 @@
+# /etc/logrotate.d/dtcdn: the cron logs (install/dtcdn-cron) and Logger's fallback files in /home/dtcdn/logs
+/home/dtcdn/logs/*.log /home/dtcdn/logs/*.html {
+	weekly
+	rotate 4
+	compress
+	delaycompress
+	missingok
+	notifempty
+	su dtcdn dtcdn
+	create 0644 dtcdn dtcdn
+}

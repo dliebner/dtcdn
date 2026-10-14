@@ -160,7 +160,14 @@ switch( $action ) {
 				'progressToken' => $pt
 			];
 
-			if( $job->transcodeFinished ) {
+			if( $job->hasFailed() ) {
+
+				AjaxResponse::returnError("There was an error transcoding the video.", debugEnabled() ? [
+					'failCode' => json_decode($job->data['transcode_fail_code']),
+					'failOutput' => json_decode($job->data['transcode_fail_output']),
+				] : null);
+
+			} else if( $job->transcodeFinished ) {
 
 				$ret += [
 					"isFinished" => true,
@@ -172,6 +179,12 @@ switch( $action ) {
 					$ret['meta'] = json_decode($job->data['hub_return_meta']);
 
 				}
+
+			} else if( $job->isStale() ) {
+
+				// Waiting for a slot or for its finish for too long (the minute sweep will end it one way or the other):
+				// an error now rather than a bar the user watches forever
+				AjaxResponse::returnError("The video is taking too long to process. Please try again later.");
 
 			} else if( !$job->transcodeStarted ) {
 
@@ -193,6 +206,8 @@ switch( $action ) {
 
 				}
 
+				// $isFinished means ffmpeg is done but the job isn't: the die handler (or the sweep, within a minute) still
+				// has to move the output and register the version, so the client keeps polling and sees 100% meanwhile
 				$ret += [
 					"isFinished" => false,
 					"pctComplete" => $pctComplete,
