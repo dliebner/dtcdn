@@ -141,6 +141,12 @@ if [ ! -f "$RESOLVED_DROPIN" ] || [ "$(cat "$RESOLVED_DROPIN")" != "$RESOLVED_CO
 fi
 
 # copy files
+# the crons' log directory: dtcdn-owned and not world-writable (the repo's logs/ is 0777, where a planted symlink
+# would redirect a cron's output into any file dtcdn can write)
+sudo mkdir -p /var/log/dtcdn
+sudo chown dtcdn:dtcdn /var/log/dtcdn
+sudo chmod 0750 /var/log/dtcdn
+
 visudo -cf dtcdn-sudoers # check before it is in place: a bad file there breaks sudo for the whole box
 sudo install -m 0440 dtcdn-sudoers /etc/sudoers.d/dtcdn-sudoers
 sudo cp dtcdn-cron /etc/cron.d/

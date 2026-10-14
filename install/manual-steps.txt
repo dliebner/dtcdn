@@ -100,7 +100,8 @@ git pull
 #    container states and logs transcode_sweep_unknown_state every minute (it leaves such jobs alone).
 cd /home/dtcdn/install
 visudo -cf dtcdn-sudoers && sudo install -m 0440 dtcdn-sudoers /etc/sudoers.d/dtcdn-sudoers   # adds scripts/docker-container.sh
-sudo cp dtcdn-cron /etc/cron.d/                                                               # output now goes to logs/cron-*.log
+sudo mkdir -p /var/log/dtcdn && sudo chown dtcdn:dtcdn /var/log/dtcdn && sudo chmod 0750 /var/log/dtcdn
+sudo cp dtcdn-cron /etc/cron.d/                                                               # output now goes to /var/log/dtcdn/cron-*.log
 sudo cp dtcdn-logrotate /etc/logrotate.d/dtcdn
 sudo cp dtcdn-docker-events.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart dtcdn-docker-events
 systemctl status dtcdn-docker-events --no-pager | head -5

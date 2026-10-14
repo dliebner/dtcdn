@@ -605,11 +605,22 @@ class CDNTools {
 	 *
 	 * @return bool true on success; false on failure
 	 */
+	/**
+	 * Removes a directory tree. A symlink inside it is removed as a link, never followed: these trees sit in
+	 * world-writable directories (transcoding/, www/v), where a planted link could otherwise point a delete at any file
+	 * the caller may write.
+	 */
 	public static function rrmdir($source, $removeOnlyChildren = false) {
 
-		if( empty($source) || file_exists($source) === false ) return false;
+		if( empty($source) ) return false;
 
-		if( is_file($source) || is_link($source) ) return unlink($source);
+		$source = rtrim($source, '/'); // "link/" would make is_link() look through the link
+
+		if( is_link($source) ) return unlink($source);
+
+		if( file_exists($source) === false ) return false;
+
+		if( is_file($source) ) return unlink($source);
 
 		/** @var SplFileInfo[] $files */
 		$files = new RecursiveIteratorIterator(
@@ -619,13 +630,19 @@ class CDNTools {
 
 		foreach( $files as $file ) {
 
-			if( $file->isDir() ) {
+			$path = $file->getPathname(); // not getRealPath(): that is the link's target
 
-				if( self::rrmdir($file->getRealPath()) === false ) return false;
+			if( $file->isLink() ) {
+
+				if( unlink($path) === false ) return false;
+
+			} else if( $file->isDir() ) {
+
+				if( rmdir($path) === false ) return false; // CHILD_FIRST: already emptied
 
 			} else {
 
-				if( unlink($file->getRealPath()) === false ) return false;
+				if( unlink($path) === false ) return false;
 
 			}
 
@@ -1667,8 +1684,9 @@ class TranscodingJob {
 		// Claim job
 		if( !$this->setTranscodeStarted() ) return;
 
-		// Required
-		if( !$dir = realpath($this->inProgressDir()) ) {
+		// Required: the job's own directory, not a symlink planted in world-writable transcoding/ (the root script
+		// chowns and mounts whatever it is handed; it checks this too)
+		if( is_link(rtrim($this->inProgressDir(), '/')) || !$dir = realpath($this->inProgressDir()) ) {
 
 			$this->unsetTranscodeStarted();
 			throw new Exception("Error getting absolute path");
@@ -1906,8 +1924,17 @@ class TranscodingJob {
 		$transcodeOutDir = $this->inProgressDir() . CDNClient::DIR_TRANSCODE_OUTPUT;
 		$wwwDir = VideoPath::localWwwPath() . VideoPath::videoUriBaseFolder($this->srcFilename);
 
-		// Move contents of transcode out dir to www dir
+		// Move contents of transcode out dir to www dir. The work directory is world-writable, so only a real out/
+		// directory inside the real work directory is read, and a symlinked entry is skipped rather than moved into
+		// the served tree (a link's target would be renamed there).
 		$basePath = realpath($transcodeOutDir);
+		$workPath = realpath($this->inProgressDir());
+
+		if( !$basePath || !$workPath || is_link(rtrim($transcodeOutDir, '/')) || $basePath !== $workPath . '/' . rtrim(CDNClient::DIR_TRANSCODE_OUTPUT, '/') ) {
+
+			throw new GeneralExceptionWithData("Output directory is not the job's own", [ 'out' => $transcodeOutDir, 'resolved' => $basePath ]);
+
+		}
 
 		/** @var SplFileInfo[] $files */
 		$files = new RecursiveIteratorIterator(
@@ -1916,6 +1943,8 @@ class TranscodingJob {
 		);
 
 		foreach( $files as $file ) {
+
+			if( $file->isLink() ) continue;
 
 			$filePath = $file->getRealPath();
 			$relativePath = substr($filePath, strlen($basePath) + 1);
@@ -2187,9 +2216,10 @@ class TranscodingJob {
 
 	}
 
-	protected function lockName() {
+	/** A SQL expression for the lock's name: named locks are server-wide, so the database name keeps instances apart */
+	protected function lockNameSql() {
 
-		return 'dtcdn_transcoding_job_' . (int)$this->id;
+		return "CONCAT(DATABASE(), '_transcoding_job_', " . (int)$this->id . ")";
 
 	}
 
@@ -2198,7 +2228,7 @@ class TranscodingJob {
 
 		$db = db();
 
-		$sql = "SELECT GET_LOCK('" . $this->lockName() . "', 0) AS locked";
+		$sql = "SELECT GET_LOCK(" . $this->lockNameSql() . ", 0) AS locked";
 
 		if( !$result = $db->sql_query($sql) ) throw new QueryException("Error getting lock", $sql);
 
@@ -2208,7 +2238,7 @@ class TranscodingJob {
 
 	protected function unlock() {
 
-		db()->sql_query("SELECT RELEASE_LOCK('" . $this->lockName() . "')");
+		db()->sql_query("SELECT RELEASE_LOCK(" . $this->lockNameSql() . ")");
 
 	}
 
@@ -2417,11 +2447,14 @@ class TranscodingJob {
 				} else {
 
 					// Exited with no finish attempt yet (the die handler missed it): finished however old it is; the hub's
-					// refusal of a deleted source then ends it
+					// refusal of a deleted source then ends it. null means another process holds the job's lock; past the
+					// age limit that is a lock nothing will release (a hung handler, another MySQL session), so the job
+					// is failed rather than left holding a slot.
 					$result = $job->finishTranscode();
 
 					if( $result === true ) $report['finished']++;
 					else if( $result === false ) $report['retried']++;
+					else if( $expired && $job->markFailed('finish_blocked', null, "lock never acquired, active $activeMinutes min") ) $report['failed']++;
 
 				}
 

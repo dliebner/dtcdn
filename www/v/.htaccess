@@ -3,3 +3,10 @@ Header set Access-Control-Allow-Origin "*"
 ExpiresActive On
 ExpiresDefault "access plus 1 year"
 Header append Cache-Control "public"
+
+# Only media is served from here. Nothing under this tree may run as PHP, whatever lands in it (the directory is
+# world-writable, and a transcode's output is moved in by name).
+RemoveHandler .php .phtml .phar
+<FilesMatch "\.(php[0-9]?|phtml|phar)$">
+	Require all denied
+</FilesMatch>

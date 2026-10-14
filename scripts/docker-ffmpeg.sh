@@ -24,6 +24,21 @@ do
 	esac
 done
 
+# The numeric options come from the hub by way of PHP and are expanded into ffmpeg filter strings below; anything
+# but digits is refused rather than word-split into extra ffmpeg arguments
+for v in "$bitRate" "$constrainWidth" "$constrainHeight" "$hlsTime" "$captureFrameIndex" "$jpegQuality" "$frameWidth" "$frameHeight"; do
+	if [ -n "$v" ] && ! [[ "$v" =~ ^[0-9]+$ ]]; then
+		echo "Non-numeric option value: $v"
+		exit 1
+	fi
+done
+
+# Only a job's own work directory is chowned and mounted, and only a real directory, not a symlink to one
+if [ -z "$dir" ] || [[ "$dir" != /home/dtcdn/transcoding/* ]] || [ -L "${dir%/}" ] || [ ! -d "$dir" ] || [ "$(readlink -f "$dir")" != "${dir%/}" ]; then
+	echo "Invalid directory -d"
+	exit 1
+fi
+
 # Initialize directory parameters
 dirParams=()
 
@@ -59,7 +74,9 @@ else
 	encodeParams+=( -fpsmax:v:0 30 )
 	encodeParams+=( -c:v:0 h264 )
 	encodeParams+=( -b:v:0 "$bitRate" -preset medium )
-	encodeParams+=( -vf:0 $(IFS=, ; echo "${videoFilters[*]}") )
+	if [ ${#videoFilters[@]} -gt 0 ]; then
+		encodeParams+=( -vf:0 "$(IFS=, ; echo "${videoFilters[*]}")" )
+	fi
 	encodeParams+=( -sws_flags bicubic )
 	encodeParams+=( -movflags +faststart -pix_fmt yuv420p )
 fi
@@ -116,7 +133,7 @@ if [ ! -z "$frameOutFile" ]; then
 	fi
 
 	# Add frame extraction command
-	encodeParams+=( -vf:1 $(IFS=, ; echo "${frameFilters[*]}") )
+	encodeParams+=( -vf:1 "$(IFS=, ; echo "${frameFilters[*]}")" )
 	encodeParams+=( -vframes:v:1 1 )
 	encodeParams+=( -c:v:1 mjpeg )
 	encodeParams+=( -q:v:1 "$jpegQuality" )
@@ -131,11 +148,13 @@ chown -R "$dtcdnUid":"$dtcdnGid" "$dir"
 
 # Run the docker container for ffmpeg encoding with the collected parameters. It runs as the dtcdn user (since
 # 2026-10; root before), so a process in the container has no root on the host side of the mount and the output it
-# writes belongs to dtcdn like the directory it lands in.
+# writes belongs to dtcdn like the directory it lands in; it has no network and no capabilities, since an encode
+# needs neither. The label is what scripts/docker-container.sh and the prune cron recognise as ours.
 # -y -nostdin: a retried job writes into the same out/ directory as the job before it, which may have left a partial
 # file (killed or crashed mid-encode); without -y ffmpeg asks whether to overwrite, reads EOF from the detached
 # container's stdin and exits 1, failing every retry
-docker run "${dirParams[@]}" --user "$dtcdnUid":"$dtcdnGid" -d dliebner/ffmpeg-entrydefault ffmpeg -hwaccel none -y -nostdin \
+docker run "${dirParams[@]}" --user "$dtcdnUid":"$dtcdnGid" --network none --cap-drop ALL --security-opt no-new-privileges \
+--label dtcdn.managed=1 -d dliebner/ffmpeg-entrydefault ffmpeg -hwaccel none -y -nostdin \
 -progress /dev/stdout \
 -i "$inFile" \
 -map 0:v:0 -map 0:a:0? \

@@ -32,6 +32,12 @@ case "$action" in
 		docker inspect --type container --format '{{.State.Status}} {{.State.ExitCode}} {{.State.FinishedAt}}' "$containerId"
 		;;
 	kill)
+		# only a container this install started (the label from docker-ffmpeg.sh / docker-ffprobe.sh), never another
+		# service's on the same host
+		if [ "$(docker inspect --type container --format '{{index .Config.Labels "dtcdn.managed"}}' "$containerId" 2>/dev/null)" != "1" ]; then
+			echo "Not a dtcdn container"
+			exit 1
+		fi
 		docker kill "$containerId"
 		;;
 	*)

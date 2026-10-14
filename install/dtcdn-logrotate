@@ -1,5 +1,7 @@
-# /etc/logrotate.d/dtcdn: the cron logs (install/dtcdn-cron) and Logger's fallback files in /home/dtcdn/logs
-/home/dtcdn/logs/*.log /home/dtcdn/logs/*.html {
+# /etc/logrotate.d/dtcdn
+
+# the dtcdn crons' logs (install/dtcdn-cron)
+/var/log/dtcdn/*.log {
 	weekly
 	rotate 4
 	compress
@@ -7,7 +9,18 @@
 	missingok
 	notifempty
 	su dtcdn dtcdn
-	# both the dtcdn crons and Apache (Logger's fallback files) append here; dtcdn is in the www-data group
+	create 0640 dtcdn dtcdn
+}
+
+# Logger's fallback files in the repo's logs/, written by Apache and the crons; dtcdn is in the www-data group
+/home/dtcdn/logs/*.html {
+	weekly
+	rotate 4
+	compress
+	delaycompress
+	missingok
+	notifempty
+	su dtcdn dtcdn
 	create 0664 dtcdn www-data
 }
 
