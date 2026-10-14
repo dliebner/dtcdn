@@ -34,12 +34,35 @@ vi /etc/apache2/mods-available/mpm_event.conf
 
 
 #
-# Set php-fpm config
+# php-fpm config
 #
 
-vi /etc/php/7.4/fpm/pool.d/www.conf
-# pm.max_children = 10
-# pm.max_requests = 100000
+# install.sh sets these in /etc/php/7.4/fpm/pool.d/www.conf (and net.core.somaxconn = 4096 in
+# /etc/sysctl.d/60-fpm.conf). On a server installed before 2026-10 set them by hand, then
+# `sysctl --system` and `php-fpm7.4 -t && systemctl restart php7.4-fpm` (a reload keeps the old
+# listening socket, so listen.backlog only changes on a restart):
+#
+#   listen.backlog = 1024
+#   pm.max_children = 64             ; was 10: one request per child, ~20 MB each
+#   pm.start_servers = 16
+#   pm.min_spare_servers = 8
+#   pm.max_spare_servers = 32
+#   pm.max_requests = 10000
+#   pm.status_path = /fpm-status     ; served to localhost by the -ssl vhost
+#   slowlog = /var/log/php7.4-fpm.slow.log
+#   request_slowlog_timeout = 2s     ; backtrace of any request over 2 s
+#   request_terminate_timeout = 3600s ; counts from the first byte, and Apache streams the upload body
+#                                     ; to php-fpm as it arrives, so it must outlast a 525M upload on a
+#                                     ; slow connection (300s = 14 Mbit/s minimum); only a stuck request hits it
+#
+# Why 64: the hub polls syncClientData once a second with a 1 s timeout, so a stall of a few seconds
+# fills a 10-child pool with queued heartbeats and the hub marks the server unreachable. Each uploader
+# also costs ~2 upload-progress polls a second plus one child for a few seconds at the end.
+# Check, on the box: curl -s "https://$DTCDN_HOSTNAME/fpm-status?full" | head -12
+# (the vhost is bound to the host's address, so a request to 127.0.0.1 doesn't reach it; the block's
+# `Require local` accepts a connection whose client and server address are the same, which that is)
+# (listen queue should be 0, max children reached should stay 0); saturation also logs
+# "server reached pm.max_children" in /var/log/php7.4-fpm.log.
 
 
 #

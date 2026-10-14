@@ -37,9 +37,7 @@ class CDNClient {
 
 	public static function gitPull(&$execOutput = null) {
 
-		$cmd = escapeshellcmd(
-			"sudo /home/dtcdn/scripts/git-pull.sh"
-		);
+		$cmd = 'sudo /home/dtcdn/scripts/git-pull.sh'; // a constant: nothing to escape
 
 		$execOutput = null;
 		exec($cmd, $execOutput, $execResult);
@@ -740,11 +738,11 @@ class FFProbe {
 
 	public static function dockerProxyProbe($videoFilePath, &$execResult = null, &$execOutput = null, &$ffprobeResultRaw = null) {
 
+		// Each argument escaped once, nothing applied to the assembled command: escapeshellcmd on top of
+		// escapeshellarg backslashes $ and \ inside the quoted values and mangles a path instead of protecting it
 		$dir = escapeshellarg(dirname($videoFilePath));
 		$filename = escapeshellarg(basename($videoFilePath));
-		$cmd = escapeshellcmd(
-			"sudo /home/dtcdn/scripts/docker-ffprobe.sh -d $dir -f $filename"
-		);
+		$cmd = "sudo /home/dtcdn/scripts/docker-ffprobe.sh -d $dir -f $filename";
 
 		exec($cmd, $execOutput, $execResult);
 
@@ -1527,9 +1525,9 @@ class TranscodingJob {
 
 		}
 
-		$cmd = escapeshellcmd(
-			"sudo /home/dtcdn/scripts/docker-ffmpeg.sh " . implode(" ", $escapedArgs)
-		);
+		// The values above are each escapeshellarg'd; no escapeshellcmd over the whole command (it would backslash
+		// characters inside the quoted values)
+		$cmd = "sudo /home/dtcdn/scripts/docker-ffmpeg.sh " . implode(" ", $escapedArgs);
 
 		exec($cmd, $execOutput, $execResult);
 
@@ -2087,9 +2085,7 @@ class TranscodingJob {
 
 		$containerId = escapeshellarg($this->dockerContainerId);
 
-		$cmd = escapeshellcmd(
-			"sudo /home/dtcdn/scripts/docker-logs.sh -c $containerId -n 70"
-		);
+		$cmd = "sudo /home/dtcdn/scripts/docker-logs.sh -c $containerId -n 70"; // the id is escaped above; no escapeshellcmd on top
 
 		exec($cmd, $execOutput, $execResult);
 

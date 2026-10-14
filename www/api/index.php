@@ -239,9 +239,10 @@ switch( $payload->action ) {
 
 		if( $options->dctHash && ($getVideoDCTHashPath = './' . $root_path . 'utils/getVideoDCTHash') && file_exists($getVideoDCTHashPath) ) {
 
-			$cmd = $getVideoDCTHashPath . ' ' . escapeshellarg($tmpFile);
+			// Each argument escaped once; escapeshellcmd over an escapeshellarg'd string backslashes $ and \ inside the quotes
+			$cmd = escapeshellarg($getVideoDCTHashPath) . ' ' . escapeshellarg($tmpFile);
 
-			$result = exec( escapeshellcmd($cmd) );
+			$result = exec( $cmd );
 	
 			if( $result && is_numeric($result) ) {
 				
