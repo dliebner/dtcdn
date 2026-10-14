@@ -2946,7 +2946,10 @@ class TranscodingJob {
 
 		$containerId = escapeshellarg($this->dockerContainerId);
 
-		$cmd = "sudo /home/dtcdn/scripts/docker-logs.sh -c $containerId -n 70"; // the id is escaped above; no escapeshellcmd on top
+		// The id is escaped above; no escapeshellcmd on top. Only the container's stdout carries the progress lines;
+		// its stderr (ffmpeg's banner and encode summary) is dropped, or it lands in the caller's output, i.e. the
+		// cron log on every finish from the sweep
+		$cmd = "sudo /home/dtcdn/scripts/docker-logs.sh -c $containerId -n 70 2>/dev/null";
 
 		exec($cmd, $execOutput, $execResult);
 
