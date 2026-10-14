@@ -2099,8 +2099,9 @@ class TranscodingJob {
 	}
 
 	/**
-	 * Fails a job whose output publishOutput() has already put into www/ and removes those files, which no registered
-	 * version points at. The work directory goes with deleteExpiredJobs() as for any failed job.
+	 * Fails a job whose source the hub no longer has, and removes what publishOutput() put into www/ for it: the version
+	 * (and an HLS zip beside it) and the source's poster, which nothing will ever point at. The work directory goes with
+	 * deleteExpiredJobs() as for any failed job.
 	 */
 	public function failPublished($failCode, $failOutput, $message) {
 
@@ -2109,6 +2110,10 @@ class TranscodingJob {
 		try {
 
 			CDNClient::deleteVideoVersion($this->versionFilename, $this->isHls() ? 'hls' : 'mp4');
+
+			if( $this->isHls() ) @unlink(VideoPath::hlsZipLocalPath($this->versionFilename));
+
+			if( $this->jobSettings->savePoster ) CDNClient::deleteVideoPoster($this->srcFilename, $this->jobSettings->posterFrameIndex ?: 0);
 
 		} catch( Throwable $e ) {
 
@@ -2350,8 +2355,9 @@ class TranscodingJob {
 
 					// Exited, but every finish attempt has failed, and the job is too old for the hub to still want the
 					// version. (An exited job with no attempt yet is finished below however old it is; the hub's refusal
-					// of a deleted source then ends it.)
-					if( $job->failPublished('finish_timeout', json_decode($job->data['transcode_fail_output'], true), 'finish still failing ' . $job->ageMinutes() . ' min after creation') ) $report['failed']++;
+					// of a deleted source then ends it.) The published files stay: the hub may have registered the version
+					// on an attempt whose response was lost, and its orphan rule removes an unused one.
+					if( $job->markFailed('finish_timeout', json_decode($job->data['transcode_fail_output'], true), 'finish still failing ' . $job->ageMinutes() . ' min after creation') ) $report['failed']++;
 
 				} else {
 
@@ -2610,11 +2616,29 @@ class TranscodingJob {
 
 		}
 
-		$deleteIds = [];
+		$expiredJobs = [];
 
 		while( $row = $db->sql_fetchrow($result) ) {
 
-			$job = new self($row);
+			$expiredJobs[] = new self($row);
+
+		}
+
+		$deleteIds = self::getJobIds($expiredJobs);
+
+		foreach( $expiredJobs as $job ) {
+
+			// A retry after an abandoned or failed job is a new row for the same version, in the same work directory
+			// (the source is still there). Leave the directory to that job; only the row goes.
+			$sql = "SELECT 1
+				FROM transcoding_jobs
+				WHERE version_filename = '" . original_to_query($job->versionFilename) . "'
+				AND id NOT IN (" . implode(",", $deleteIds) . ")
+				LIMIT 1";
+
+			if( !$liveResult = $db->sql_query($sql) ) throw new QueryException("Error selecting", $sql);
+
+			if( $db->sql_fetchrow($liveResult) ) continue;
 
 			try {
 
@@ -2637,8 +2661,6 @@ class TranscodingJob {
 			}
 
 			unset($e);
-
-			$deleteIds[] = (int)$job->id;
 
 		}
 

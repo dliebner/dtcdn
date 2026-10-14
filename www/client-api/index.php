@@ -153,6 +153,34 @@ switch( $action ) {
 
 		}
 
+		// Failed or stale jobs end the upload. Every stale job still waiting for a slot is dropped first (nobody waits for
+		// it any more, and a retry would otherwise be handed the stale sibling and fail at once), then one error is returned.
+		$errorMessage = null;
+		$errorData = null;
+
+		foreach( $jobsByPt as $job ) {
+
+			if( $job->hasFailed() ) {
+
+				$errorMessage = $errorMessage ?: "There was an error transcoding the video.";
+				$errorData = $errorData ?: [
+					'failCode' => json_decode($job->data['transcode_fail_code']),
+					'failOutput' => json_decode($job->data['transcode_fail_output']),
+				];
+
+			} else if( $job->isStale() ) {
+
+				// A job whose finish is being retried keeps its output and the sweep decides; a waiting one is abandoned
+				if( !$job->transcodeStarted ) $job->markFailed('abandoned', null, 'reported stale to the uploader while waiting ' . $job->ageMinutes() . ' min', true);
+
+				$errorMessage = $errorMessage ?: "The video is taking too long to process. Please try again later.";
+
+			}
+
+		}
+
+		if( $errorMessage ) AjaxResponse::returnError($errorMessage, debugEnabled() ? $errorData : null);
+
 		$returnProgressTokens = [];
 		foreach( $jobsByPt as $pt => $job ) {
 
@@ -160,14 +188,7 @@ switch( $action ) {
 				'progressToken' => $pt
 			];
 
-			if( $job->hasFailed() ) {
-
-				AjaxResponse::returnError("There was an error transcoding the video.", debugEnabled() ? [
-					'failCode' => json_decode($job->data['transcode_fail_code']),
-					'failOutput' => json_decode($job->data['transcode_fail_output']),
-				] : null);
-
-			} else if( $job->transcodeFinished ) {
+			if( $job->transcodeFinished ) {
 
 				$ret += [
 					"isFinished" => true,
@@ -179,15 +200,6 @@ switch( $action ) {
 					$ret['meta'] = json_decode($job->data['hub_return_meta']);
 
 				}
-
-			} else if( $job->isStale() ) {
-
-				// Waiting for a slot or for its finish for too long: an error now rather than a bar the user watches forever.
-				// A job still waiting is dropped (nobody is waiting for it any more; a retry reuses a running job, not a
-				// waiting one); one whose finish is being retried keeps its output and the sweep decides.
-				if( !$job->transcodeStarted ) $job->markFailed('abandoned', null, 'reported stale to the uploader while waiting ' . $job->ageMinutes() . ' min', true);
-
-				AjaxResponse::returnError("The video is taking too long to process. Please try again later.");
 
 			} else if( !$job->transcodeStarted ) {
 
