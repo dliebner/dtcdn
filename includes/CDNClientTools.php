@@ -1545,8 +1545,11 @@ class TranscodingJob {
 
 			if( $job->markFailed('abandoned', null, 'stale waiting job replaced by a retried upload after ' . $job->ageMinutes() . ' min', true) ) return null;
 
-			// A starter claimed it between the select and the abandon: it is encoding now, so reuse it
-			return self::getById($job->id) ?: null;
+			// A starter claimed it between the select and the abandon: it is encoding now, so reuse it (unless it was
+			// finished or failed in that same instant, e.g. by the original uploader's poll)
+			$fresh = self::getById($job->id);
+
+			return ($fresh && !$fresh->hasFailed()) ? $fresh : null;
 
 		}
 
@@ -2385,13 +2388,19 @@ class TranscodingJob {
 
 					if( $expired ) {
 
-						if( $job->killContainer($killOutput) ) {
+						// Failed only once the container is known to be stopped (a retry would share its out/ under -y),
+						// which a failed kill of a running container doesn't give; docker kill also refuses a container
+						// that isn't running (created, paused), and such a one holds nothing, so that job is failed too
+						$killed = $job->killContainer($killOutput);
+						$stillRunning = !$killed && in_array($state['status'], [ 'running', 'restarting' ], true);
 
-							if( $job->markFailed('timeout', $state, "still running after $activeMinutes min; container killed") ) $report['failed']++;
-
-						} else {
+						if( $stillRunning ) {
 
 							Logger::logEvent('transcode_kill_failed', [ 'message' => 'Could not kill the container of an expired job; left for the next sweep', 'data' => [ 'jobId' => $job->id, 'output' => $killOutput ] ]);
+
+						} else if( $job->markFailed('timeout', [ 'containerState' => $state, 'killed' => $killed, 'killOutput' => $killOutput ], "still {$state['status']} after $activeMinutes min" . ($killed ? '; container killed' : '')) ) {
+
+							$report['failed']++;
 
 						}
 
