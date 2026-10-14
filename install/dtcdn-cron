@@ -20,5 +20,6 @@
 * * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/handle-404s.php >> /home/dtcdn/logs/cron-handle-404s.log 2>&1
 
 # Prune old stopped docker containers (timestamp is relative to when container was started). As root: the dtcdn
-# user isn't in the docker group, and until 2026-10 this line ran as dtcdn and had never pruned anything
-11 * * * * root docker container prune --filter "until=48h" -f >> /home/dtcdn/logs/cron-docker-prune.log 2>&1
+# user isn't in the docker group, and until 2026-10 this line ran as dtcdn and had never pruned anything. Its log
+# is under /var/log, not the world-writable logs/, so root never appends through a symlink someone planted there.
+11 * * * * root docker container prune --filter "until=48h" -f >> /var/log/dtcdn-docker-prune.log 2>&1

@@ -10,3 +10,13 @@
 	# both the dtcdn crons and Apache (Logger's fallback files) append here; dtcdn is in the www-data group
 	create 0664 dtcdn www-data
 }
+
+# the root cron's prune log (install/dtcdn-cron)
+/var/log/dtcdn-docker-prune.log {
+	weekly
+	rotate 4
+	compress
+	delaycompress
+	missingok
+	notifempty
+}
