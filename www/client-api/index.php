@@ -427,7 +427,7 @@ switch( $action ) {
 				// (a hub-initiated job whose cloud download hasn't happened) gets this upload as its source.
 				if( $existingJob = TranscodingJob::findReusableJob($versionFilename) ) {
 
-					if( !$existingJob->transcodeStarted && !$existingJob->transcodeFinished && !$existingJob->sourceVideoExistsOnDisk() ) {
+					if( !$existingJob->transcodeStarted && !$existingJob->transcodeFinished && !$existingJob->sourceVideoExistsOnDisk() && !$existingJob->data['cloud_download_src_in_progress'] ) {
 
 						$existingJob->createInProgressDir();
 

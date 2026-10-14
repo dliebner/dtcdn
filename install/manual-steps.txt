@@ -85,8 +85,9 @@ port_speed					X Gbit
 #
 
 # 1. Before the pull: the ffmpeg container runs as the dtcdn user from this version on. Check that the image starts
-#    that way and still prints progress lines (a failure here would fail every upload the moment the pull lands):
-#   sudo -u dtcdn docker run --rm --user $(id -u dtcdn):$(id -g dtcdn) dliebner/ffmpeg-entrydefault ffmpeg -f lavfi -i testsrc=d=1 -progress /dev/stdout -f null -
+#    that way and that its progress lines reach docker logs, as production reads them (detached, root's docker; a
+#    failure here would fail every upload the moment the pull lands). Expect a progress=end line:
+#   cid=$(sudo docker run -d --user $(id -u dtcdn):$(id -g dtcdn) dliebner/ffmpeg-entrydefault ffmpeg -y -nostdin -f lavfi -i testsrc=d=1 -progress /dev/stdout -f null -); sleep 3; sudo docker logs $cid | grep progress=end; sudo docker rm $cid
 #
 #    The pull itself. install.sh ran chmod +x on the scripts, which git shows as mode-only changes (" M"), and
 #    the 2026-10 commit sets those same modes, so the pull refuses to overwrite them: put the modes back first.

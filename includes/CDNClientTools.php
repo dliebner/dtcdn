@@ -1165,7 +1165,9 @@ class TranscodingJob {
 	/**
 	 * A finish that keeps failing (hub unreachable, probe error) is retried by the sweep until the job is this old, counted
 	 * from its creation. Inside the hub's one-hour rule for a source with no version: past that the hub has deleted the
-	 * source and refuses the version anyway, so the output is thrown away instead.
+	 * source and refuses the version anyway. Counting from creation means a job that waited long for a slot gets fewer
+	 * retries, and a job for a source that already has a post (no orphan rule) is given up on just the same; accepted,
+	 * since the published files are kept and the hub may still hold the version.
 	 */
 	const TRANSCODE_FINISH_RETRY_MAX_MINUTES = 50;
 	/** A claim (transcode_started) with no container recorded yet is startTranscode() mid-run for this long; older ones are released */
@@ -1451,7 +1453,8 @@ class TranscodingJob {
 		$sql = "SELECT *
 			FROM transcoding_jobs
 			WHERE flag_cloud_download_src = 1
-			AND cloud_download_src_in_progress = 0";
+			AND cloud_download_src_in_progress = 0
+			AND transcode_finished IS NULL";
 
 		if( !$result = $db->sql_query($sql) ) throw new QueryException("Error selecting from transcoding_jobs", $sql);
 
@@ -2044,9 +2047,11 @@ class TranscodingJob {
 
 		$db = db();
 
-		// Only an unfinished row: another process may have finished it since this one was read
+		// Only an unfinished row: another process may have finished it since this one was read. A pending source
+		// download is dropped with it, so it can't keep writing into a directory a replacement job uses.
 		$sql = "UPDATE transcoding_jobs
 			SET transcode_finished = NOW(),
+				flag_cloud_download_src = 0,
 				transcode_fail_code = '" . original_to_query(self::jsonColumn($failCode)) . "',
 				transcode_fail_output = '" . original_to_query(self::jsonColumn($failOutput)) . "'
 			WHERE id = " . (int)$this->id . "
@@ -2361,8 +2366,17 @@ class TranscodingJob {
 					// eventually, or this is the incident again under another name.
 					if( $expired ) {
 
-						$job->killContainer();
-						if( $job->markFailed('state_unknown_timeout', $inspectOutput, "container state unreadable, active $activeMinutes min") ) $report['failed']++;
+						// Failed only once the container is known to be stopped: a job marked failed while ffmpeg still
+						// runs would share its out/ with a retry (-y lets both write)
+						if( $job->killContainer($killOutput) ) {
+
+							if( $job->markFailed('state_unknown_timeout', $inspectOutput, "container state unreadable, active $activeMinutes min") ) $report['failed']++;
+
+						} else {
+
+							Logger::logEvent('transcode_kill_failed', [ 'message' => 'Could not kill the container of an expired job; left for the next sweep', 'data' => [ 'jobId' => $job->id, 'output' => $killOutput ] ]);
+
+						}
 
 					} else {
 
@@ -2375,8 +2389,15 @@ class TranscodingJob {
 
 					if( $expired ) {
 
-						$job->killContainer();
-						if( $job->markFailed('timeout', $state, "still running after $activeMinutes min; container killed") ) $report['failed']++;
+						if( $job->killContainer($killOutput) ) {
+
+							if( $job->markFailed('timeout', $state, "still running after $activeMinutes min; container killed") ) $report['failed']++;
+
+						} else {
+
+							Logger::logEvent('transcode_kill_failed', [ 'message' => 'Could not kill the container of an expired job; left for the next sweep', 'data' => [ 'jobId' => $job->id, 'output' => $killOutput ] ]);
+
+						}
 
 					} else {
 
