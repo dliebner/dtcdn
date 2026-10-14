@@ -123,4 +123,4 @@ systemctl status dtcdn-docker-events --no-pager | head -5
 # Check the pipeline's state at any time (and sweep it now with --fix):
 #   sudo -u dtcdn /usr/bin/php7.4 /home/dtcdn/scripts/jobs-status.php
 # A transcode is finished by the die daemon at once, or by cron/minute.php's sweep within a minute if the daemon
-# missed it; a job whose finish keeps failing is retried every minute and given up after 2 hours.
+# missed it; a job whose finish keeps failing is retried every minute and given up 50 minutes after its creation.
