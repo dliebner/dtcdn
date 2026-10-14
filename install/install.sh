@@ -212,10 +212,13 @@ sudo cp dtcdn-docker-events.service /etc/systemd/system/
 # chown files again
 chown -R dtcdn:dtcdn /home/dtcdn/
 
-# php-fpm pool: raise the Ubuntu defaults (10 children) so a few uploaders plus the hub's once-a-second
-# heartbeat can't fill the pool. Each child serves one request at a time and uses ~20 MB here, so 64
-# children is ~1.3 GB at full load. The slow log names any request over 2 s; the status page is served
-# to localhost by the ssl vhost (/fpm-status). See manual-steps.txt for the reasoning.
+# php-fpm pool: raise the stock pool (a handful of children) so a few uploaders plus the hub's
+# once-a-second heartbeat can't fill it. Each child serves one request at a time and uses ~20 MB here,
+# so 64 children is ~1.3 GB at full load. The slow log names any request over 2 s; the status page is
+# served to localhost by the ssl vhost (/fpm-status). See manual-steps.txt for the reasoning.
+# request_terminate_timeout counts from the first byte of the request, and Apache streams an upload
+# body to php-fpm as it arrives, so it must cover the whole client upload (525M at a slow rate), not
+# only the script's run time; 300s would kill a large upload on a slow connection.
 FPM_POOL=/etc/php/7.4/fpm/pool.d/www.conf
 sudo sed -i -E \
 	-e 's/^;?listen\.backlog = .*/listen.backlog = 1024/' \
@@ -227,7 +230,7 @@ sudo sed -i -E \
 	-e 's/^;?pm\.status_path = .*/pm.status_path = \/fpm-status/' \
 	-e 's#^;?slowlog = .*#slowlog = /var/log/php7.4-fpm.slow.log#' \
 	-e 's/^;?request_slowlog_timeout = .*/request_slowlog_timeout = 2s/' \
-	-e 's/^;?request_terminate_timeout = .*/request_terminate_timeout = 300s/' \
+	-e 's/^;?request_terminate_timeout = .*/request_terminate_timeout = 3600s/' \
 	$FPM_POOL
 # listen.backlog is capped by the kernel's somaxconn (4096 on 20.04's kernel; pin it)
 echo 'net.core.somaxconn = 4096' | sudo tee /etc/sysctl.d/60-fpm.conf > /dev/null
