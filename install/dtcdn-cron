@@ -19,5 +19,6 @@
 # Figures out what files we need to retrieve
 * * * * * dtcdn /usr/bin/php7.4 /home/dtcdn/cron/handle-404s.php >> /home/dtcdn/logs/cron-handle-404s.log 2>&1
 
-# Prune old stopped docker containers (timestamp is relative to when container was started)
-11 * * * * dtcdn docker container prune --filter "until=48h" -f >> /home/dtcdn/logs/cron-docker-prune.log 2>&1
+# Prune old stopped docker containers (timestamp is relative to when container was started). As root: the dtcdn
+# user isn't in the docker group, and until 2026-10 this line ran as dtcdn and had never pruned anything
+11 * * * * root docker container prune --filter "until=48h" -f >> /home/dtcdn/logs/cron-docker-prune.log 2>&1
