@@ -3317,13 +3317,27 @@ class Cron {
 
 			TranscodingJob::setCloudDownloadSrcInProgress($jobs);
 
+			// Whatever throws below, the batch's in-progress flags are reset, or its rows would never be selected again
+			// (nor taken by a retried upload) until the sweep's never_ready
+			try {
+
 			foreach( $jobs as $tcJob ) {
 
 				// The directory: nothing else makes it for a row that reached the cloud path without a sibling copy (the
 				// downloader's HTTP client refuses a sink in a missing directory, and the library makes none). The download
 				// goes to a temporary name and is renamed into place once complete (writeSource()), so the source path
 				// never holds a partial body or a failed request's error body
-				$tcJob->createInProgressDir();
+				try {
+
+					$tcJob->createInProgressDir();
+
+				} catch( Throwable $e ) {
+
+					Logger::logEvent('cloud_download_src_dir_failed', [ 'message' => $e->getMessage(), 'exception' => $e, 'data' => [ 'jobId' => $tcJob->id ] ]);
+
+					continue;
+
+				}
 
 				$downloader->addFileToDownload([
 					'tcJob' => $tcJob,
@@ -3355,10 +3369,25 @@ class Cron {
 				/** @var TranscodingJob $tcJob */
 				$tcJob = $fileOptions['tcJob'];
 
+				clearstatcache(true, $fileOptions['SaveAs']);
+				$downloadedBytes = @filesize($fileOptions['SaveAs']);
+
+				if( $downloadedBytes !== $tcJob->srcSizeBytes && !$tcJob->sourceVideoComplete() ) {
+
+					// A completed response of the wrong size is the B2 object itself not matching the row (a source that
+					// reached B2 cut short, before source writes were atomic): deterministic, so failing the row beats
+					// downloading it again every second until never_ready. A cut-off transfer is a failed file, not this.
+					@unlink($fileOptions['SaveAs']);
+
+					$tcJob->markFailed('cloud_src_size_mismatch', [ 'downloadedBytes' => $downloadedBytes, 'srcSizeBytes' => $tcJob->srcSizeBytes ], 'downloaded source is not the size the row says', true);
+
+					continue;
+
+				}
+
 				if( !$tcJob->adoptSourceFile($fileOptions['SaveAs']) ) {
 
-					// Short (a cut-off transfer the client didn't report) or unrenameable: left queued, downloaded again next
-					// second, bounded by the sweep's never_ready
+					// Unrenameable: left queued, downloaded again next second, bounded by the sweep's never_ready
 					Logger::logEvent('cloud_download_src_incomplete', [ 'message' => 'Downloaded source not adopted', 'data' => [ 'jobId' => $tcJob->id ] ]);
 
 					continue;
@@ -3381,7 +3410,11 @@ class Cron {
 
 			}
 
-			TranscodingJob::setCloudDownloadSrcInProgress($jobs, false);
+			} finally {
+
+				TranscodingJob::setCloudDownloadSrcInProgress($jobs, false);
+
+			}
 
 			if( $downloadedFiles ) return true;
 
