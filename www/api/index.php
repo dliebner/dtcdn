@@ -317,6 +317,10 @@ switch( $payload->action ) {
 			// second one into the same work directory
 			if( $existingJob = TranscodingJob::findReusableJob($versionFilename) ) {
 
+				// A row never marked ready whose writer died (a complete source here or in a sibling's directory, old
+				// enough that no live request is about to mark it) is started; otherwise its token is reported as is
+				$existingJob->startIfAbandonedBeforeReady();
+
 				$progressTokens[] = $existingJob->progressToken;
 				continue;
 
@@ -338,30 +342,10 @@ switch( $payload->action ) {
 				$posterConstrainHeight
 			));
 
-			if( !$tcJob->sourceVideoExistsOnDisk() ) {
-
-				$tcJob->createInProgressDir();
-
-				// Check if source exists from other jobs
-				foreach( TranscodingJob::getAllBySrcFilename($tcJob->srcFilename) as $otherJob ) {
-
-					if( $otherJob->id === $tcJob->id ) continue;
-
-					if( $otherJob->sourceVideoExistsOnDisk() ) {
-
-						// Copy source video to new job's inProgressPath
-						copy($otherJob->inProgressPath(), $tcJob->inProgressPath());
-						
-						break;
-
-					}
-
-				}
-
-			}
-
-			// Get source video from cloud
-			if( $tcJob->sourceVideoExistsOnDisk() ) {
+			// The source from this directory or a sibling job's, only a complete copy (a partial one is another request's
+			// write in progress or a dead request's leftover; until 2026-10 any file passed, and a faststart mp4 cut short
+			// would have been encoded and published truncated); otherwise from the cloud
+			if( $tcJob->copySourceFromSiblings() ) {
 
 				// Start transcoding now
 				$tcJob->setTranscodeReady();

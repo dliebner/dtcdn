@@ -429,40 +429,32 @@ switch( $action ) {
 
 					if( !$existingJob->transcodeStarted && !$existingJob->transcodeFinished && !$existingJob->data['cloud_download_src_in_progress'] ) {
 
-						// A source smaller than the row says is a copy() still in progress (another request for the same file,
-						// which will mark the row ready and start it) while the row is young, or a dead request's leftover
-						// once it isn't. Only in the second case, or with no source at all, does this request write the source
-						$sourceComplete = $existingJob->sourceVideoComplete();
-						$rowOld = $existingJob->ageMinutes() >= TranscodingJob::TRANSCODE_SOURCE_WRITE_GRACE_MINUTES;
-						$wroteSource = false;
+						// Sources are written through a temporary name (TranscodingJob::writeSource()), so a file at the
+						// source path is complete; a row with none gets this upload. A row with a complete source that was
+						// never marked ready is a request that died before marking it, started here once it's old enough that
+						// no live request is about to (startIfAbandonedBeforeReady()); a younger one is left to that request.
+						if( !$existingJob->sourceVideoComplete() ) {
 
-						if( !$sourceComplete && ($rowOld || !$existingJob->sourceVideoExistsOnDisk()) ) {
+							$written = $movedUploadedFile ? $existingJob->copySourceFrom($movedUploadedFile) : $existingJob->moveUploadedFile($tmpFile);
 
-							$existingJob->createInProgressDir();
+							if( !$written ) AjaxResponse::returnError("Error preparing transcoding job.");
 
-							if( !$movedUploadedFile ) {
+							if( !$movedUploadedFile ) $movedUploadedFile = $existingJob;
 
-								if( !$existingJob->moveUploadedFile($tmpFile) ) AjaxResponse::returnError("Error preparing transcoding job.");
+							// The source reached the cloud through no other row (the hub created this one for a source it
+							// expected from the cloud), so this row uploads it
+							if( $sourceIsNew && !$existingJob->srcIsNew ) $existingJob->setSrcIsNew();
 
-								$movedUploadedFile = $existingJob;
+							if( !$existingJob->data['transcode_ready'] ) {
 
-							} else {
-
-								copy($movedUploadedFile->inProgressPath(), $existingJob->inProgressPath());
+								$existingJob->setTranscodeReady();
+								$existingJob->startTranscode();
 
 							}
 
-							$wroteSource = true;
+						} else {
 
-						}
-
-						// Start a row that was never marked ready when this request wrote its source, or when the source is
-						// complete and the request that wrote it is long gone (it died between the move and setTranscodeReady();
-						// nothing else would ever start the row, and its token would sit at 0%). Never on a partial source.
-						if( !$existingJob->data['transcode_ready'] && ($wroteSource || ($sourceComplete && $rowOld)) ) {
-
-							$existingJob->setTranscodeReady();
-							$existingJob->startTranscode();
+							$existingJob->startIfAbandonedBeforeReady();
 
 						}
 
@@ -503,9 +495,9 @@ switch( $action ) {
 
 				} else {
 
-					// Copy source video to new job's inProgressPath
-					$tcJob->createInProgressDir();
-					copy($movedUploadedFile->inProgressPath(), $tcJob->inProgressPath());
+					// Copy source video to new job's inProgressPath (checked: a copy cut short by a full disk must not be
+					// marked ready and encoded)
+					if( !$tcJob->copySourceFrom($movedUploadedFile) ) AjaxResponse::returnError("Error preparing transcoding job.");
 
 				}
 

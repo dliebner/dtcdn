@@ -1189,9 +1189,9 @@ class TranscodingJob {
 	 */
 	const TRANSCODE_FINISH_RETRY_MAX_MINUTES = 50;
 	/**
-	 * An unstarted row with a partial or missing source younger than this is another upload-video request still writing
-	 * it (a copy() of a large source takes seconds); an older one is a request that died, and a retry writes the source
-	 * itself. A never-ready row with a complete source is started by a retry only once it is this old, for the same reason.
+	 * An unstarted row with a complete source that was never marked ready is a request that died between writing the
+	 * source and setTranscodeReady(), once it is this old; younger, it's a live request about to mark it. A retry starts
+	 * the old one (startIfAbandonedBeforeReady()).
 	 */
 	const TRANSCODE_SOURCE_WRITE_GRACE_MINUTES = 2;
 	/** A claim (transcode_started) with no container recorded yet is startTranscode() mid-run for this long; older ones are released */
@@ -1461,15 +1461,134 @@ class TranscodingJob {
 		// that died mid-copy) is replaced, since until 2026-10 it was kept and the fresh upload discarded
 		if( $this->sourceVideoComplete() ) return true;
 
+		return $this->writeSource(function($dest) use ($tmpFile) { return move_uploaded_file($tmpFile, $dest); });
+
+	}
+
+	/**
+	 * Copies another job's source (the same file, another version's directory) into this job's, if that copy is complete.
+	 *
+	 * @return bool false when the other job's source isn't complete or the copy failed
+	 */
+	public function copySourceFrom(TranscodingJob $other) {
+
+		if( $this->sourceVideoComplete() ) return true;
+
+		if( !$other->sourceVideoComplete() ) return false;
+
+		$from = $other->inProgressPath();
+
+		return $this->writeSource(function($dest) use ($from) { return copy($from, $dest); });
+
+	}
+
+	/**
+	 * Copies the source from any sibling job (same source, another version) that holds a complete copy.
+	 *
+	 * @return bool true when this job's source is complete afterwards
+	 */
+	public function copySourceFromSiblings() {
+
+		if( $this->sourceVideoComplete() ) return true;
+
+		foreach( self::getAllBySrcFilename($this->srcFilename) as $otherJob ) {
+
+			if( $otherJob->id === $this->id || $otherJob->versionFilename === $this->versionFilename ) continue;
+
+			if( $this->copySourceFrom($otherJob) ) return true;
+
+		}
+
+		return false;
+
+	}
+
+	/**
+	 * Writes the source through a temporary name in the job directory and renames it into place once it has the size the
+	 * row says, so a file at inProgressPath() is always complete: a concurrent writer (two requests for the same file) or
+	 * a request that dies mid-write can only leave a .part file behind, never a short source that file_exists() would
+	 * pass to ffmpeg (a faststart mp4 cut short would have been published as a truncated version). The last writer's
+	 * rename wins, with identical bytes.
+	 *
+	 * @param callable $write function(string $destPath): bool
+	 */
+	protected function writeSource(callable $write) {
+
 		$this->createInProgressDir();
 
-		if( $this->sourceVideoExistsOnDisk() ) @unlink($this->inProgressPath());
+		$path = $this->inProgressPath();
+		$temp = $path . '.' . uniqid('', true) . '.part';
 
-		return move_uploaded_file($tmpFile, $this->inProgressPath());
+		if( !$write($temp) ) {
+
+			@unlink($temp);
+
+			return false;
+
+		}
+
+		clearstatcache(true, $temp);
+
+		if( filesize($temp) !== $this->srcSizeBytes ) {
+
+			// Disk full, or the upload isn't the file the row describes
+			@unlink($temp);
+
+			return false;
+
+		}
+
+		if( !rename($temp, $path) ) {
+
+			@unlink($temp);
+
+			return false;
+
+		}
+
+		return true;
+
+	}
+
+	/**
+	 * Starts a row that was never marked ready although its source is complete: the request that wrote the source died
+	 * before setTranscodeReady() (or wrote a partial file and a sibling's copy has been taken since). Only once the row
+	 * is TRANSCODE_SOURCE_WRITE_GRACE_MINUTES old, since a younger one is a live request about to mark it itself.
+	 *
+	 * @return bool true when it was started (or queued for a slot)
+	 */
+	public function startIfAbandonedBeforeReady() {
+
+		if( $this->transcodeStarted || $this->transcodeFinished || $this->data['transcode_ready'] || $this->data['cloud_download_src_in_progress'] ) return false;
+
+		if( $this->ageMinutes() === null || $this->ageMinutes() < self::TRANSCODE_SOURCE_WRITE_GRACE_MINUTES ) return false;
+
+		if( !$this->copySourceFromSiblings() ) return false;
+
+		$this->setTranscodeReady();
+		$this->startTranscode();
+
+		return true;
+
+	}
+
+	/** This job's source is new to the cloud and the cloud queue should upload it (a reused hub-path row that received an upload) */
+	public function setSrcIsNew() {
+
+		$this->srcIsNew = true;
+		$this->data['src_is_new'] = 1;
+
+		$sql = "UPDATE transcoding_jobs
+			SET src_is_new = 1
+			WHERE id = " . (int)$this->id;
+
+		if( !db()->sql_query($sql) ) throw new QueryException("Error updating", $sql);
 
 	}
 
 	public function setTranscodeReady() {
+
+		$this->data['transcode_ready'] = 1;
 
 		$sql = "UPDATE transcoding_jobs
 			SET transcode_ready = 1,
