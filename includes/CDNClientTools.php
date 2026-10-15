@@ -2164,7 +2164,16 @@ class TranscodingJob {
 	 */
 	public function failPublished($failCode, $failOutput, $message) {
 
-		if( !$this->markFailed($failCode, $failOutput, $message) ) return false;
+		if( !$this->markFailed($failCode, $failOutput, $message) ) {
+
+			// Already finished. Only one way leaves the files to this attempt: the sweep failed the row as finish_blocked
+			// (this attempt held the lock past the hard limit) while publishOutput() was moving them; the hub has no source
+			// for them, so they go too. Anything else (a success, finish_timeout with its files kept on purpose) is final.
+			$fresh = self::getById($this->id);
+
+			if( !$fresh || !$fresh->hasFailed() || $fresh->data['transcode_fail_code'] !== 'finish_blocked' ) return false;
+
+		}
 
 		try {
 
@@ -2889,10 +2898,12 @@ class TranscodingJob {
 				src_is_new = 1
 				AND transcode_ready = 1
 				AND src_cloud_upload_started IS NULL
+				AND src_cloud_upload_finished IS NULL
 			) OR (
 				transcode_is_finished = 1
 				AND transcode_fail_code IS NULL
 				AND cloud_upload_started IS NULL
+				AND cloud_upload_finished IS NULL
 			)
 			LIMIT " . self::CLOUD_UPLOAD_MAX_BATCH_UPLOADS;
 

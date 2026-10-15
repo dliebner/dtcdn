@@ -18,6 +18,10 @@ require($root_path . 'common.php');
 
 $fix = in_array('--fix', array_slice($argv, 1), true);
 
+// install/dtcdn-cron redirects every dtcdn cron's output here. Without the directory the shell's redirect fails and
+// cron never runs the command, so the sweep, the cloud queue and the bandwidth update all stop without a trace.
+if( !is_dir('/var/log/dtcdn') ) echo "WARNING: /var/log/dtcdn is missing; the dtcdn crons in /etc/cron.d/dtcdn-cron can't start (see install/manual-steps.txt)\n\n";
+
 function printJobs($title, array $jobs, callable $describe) {
 
 	echo $title . ': ' . count($jobs) . "\n";
