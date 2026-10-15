@@ -61,7 +61,7 @@ while( time() - $maxWaitTime < $start ) {
 
 		foreach( $tJobs as $job ) {
 
-			if( $job->srcIsNew && !$job->data['src_cloud_upload_started'] ) {
+			if( $job->srcIsNew && !$job->data['src_cloud_upload_started'] && !$job->data['src_cloud_upload_finished'] ) {
 
 				if( !file_exists($job->inProgressPath()) ) {
 
@@ -87,7 +87,7 @@ while( time() - $maxWaitTime < $start ) {
 			
 			// Not a failed job (selected here through its new source, which its sibling versions still need in B2): its
 			// version file is gone, or kept only for the hub's possible record of it (finish_timeout)
-			if( $job->data['transcode_is_finished'] && !$job->data['cloud_upload_started'] && !$job->hasFailed() ) {
+			if( $job->data['transcode_is_finished'] && !$job->data['cloud_upload_started'] && !$job->data['cloud_upload_finished'] && !$job->hasFailed() ) {
 
 				if( $job->isHls() ) {
 

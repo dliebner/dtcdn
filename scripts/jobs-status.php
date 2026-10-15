@@ -54,7 +54,7 @@ printJobs('Waiting for a slot', TranscodingJob::getUnstartedTranscodeJobs(), fun
 
 printJobs('Failed (deleted an hour after failing)', TranscodingJob::getFailedJobs(), function(TranscodingJob $job) {
 
-	return 'code ' . $job->data['transcode_fail_code'] . ', finished ' . $job->data['transcode_finished'];
+	return 'code ' . $job->failCode() . ', finished ' . $job->data['transcode_finished'];
 
 });
 

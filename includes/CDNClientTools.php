@@ -2171,7 +2171,7 @@ class TranscodingJob {
 			// for them, so they go too. Anything else (a success, finish_timeout with its files kept on purpose) is final.
 			$fresh = self::getById($this->id);
 
-			if( !$fresh || !$fresh->hasFailed() || $fresh->data['transcode_fail_code'] !== 'finish_blocked' ) return false;
+			if( !$fresh || !$fresh->hasFailed() || $fresh->failCode() !== 'finish_blocked' ) return false;
 
 		}
 
@@ -2190,6 +2190,13 @@ class TranscodingJob {
 		}
 
 		return true;
+
+	}
+
+	/** The transcode_fail_code as written (it is a JSON column, so the raw value is quoted): e.g. 'ffmpeg_failed', or null */
+	public function failCode() {
+
+		return $this->data['transcode_fail_code'] === null ? null : json_decode($this->data['transcode_fail_code']);
 
 	}
 
@@ -2422,7 +2429,7 @@ class TranscodingJob {
 
 					} else if( $activeMinutes >= self::TRANSCODE_CLAIM_GRACE_MINUTES ) {
 
-						$job->unsetTranscodeStarted();
+						$job->unsetTranscodeStarted($job->data['transcode_started']);
 						$report['retried']++;
 
 					}
@@ -2711,16 +2718,19 @@ class TranscodingJob {
 
 	}
 
-	public function unsetTranscodeStarted() {
+	public function unsetTranscodeStarted($claimedAt = null) {
 
 		// Only a claim with no container: startTranscode() may have recorded its container (a docker run that took
 		// longer than the sweep's grace period) since the caller read the row, and releasing that claim would let
-		// startWaitingJobs() start a second container into the same out/
+		// startWaitingJobs() start a second container into the same out/. With $claimedAt (the transcode_started the
+		// caller read), only that claim: two overlapping sweeps could otherwise release a claim the first one's
+		// startWaitingJobs() has just made, before its docker run records the container.
 		$sql = "UPDATE transcoding_jobs
 			SET transcode_started = NULL
 			WHERE id = " . (int)$this->id . "
 			AND docker_container_id IS NULL
-			AND transcode_finished IS NULL";
+			AND transcode_finished IS NULL" . ($claimedAt !== null ? "
+			AND transcode_started = '" . original_to_query($claimedAt) . "'" : "");
 
 		if( !db()->sql_query($sql) ) throw new QueryException("Error updating", $sql);
 
@@ -3183,7 +3193,18 @@ class Cron {
 				$tcJob = $fileOptions['tcJob'];
 
 				$tcJob->setTranscodeReady();
-				$tcJob->startTranscode();
+
+				// A start that throws (docker, the path check) is logged and left for the sweep's startWaitingJobs(); it
+				// mustn't stop the other jobs' starts or the in-progress reset below
+				try {
+
+					$tcJob->startTranscode();
+
+				} catch( Throwable $e ) {
+
+					Logger::logEvent('transcode_start_failed', [ 'message' => $e->getMessage(), 'exception' => $e, 'data' => [ 'jobId' => $tcJob->id, 'from' => 'downloadSourcesFromCloud' ] ]);
+
+				}
 
 			}
 
