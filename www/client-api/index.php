@@ -441,10 +441,6 @@ switch( $action ) {
 
 							if( !$movedUploadedFile ) $movedUploadedFile = $existingJob;
 
-							// The source reached the cloud through no other row (the hub created this one for a source it
-							// expected from the cloud), so this row uploads it
-							if( $sourceIsNew && !$existingJob->srcIsNew ) $existingJob->setSrcIsNew();
-
 							if( !$existingJob->data['transcode_ready'] ) {
 
 								$existingJob->setTranscodeReady();

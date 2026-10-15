@@ -1503,6 +1503,21 @@ class TranscodingJob {
 
 	}
 
+	/** Takes a file already in the job directory (a finished cloud download) as the source, through the same size check and rename */
+	public function adoptSourceFile($path) {
+
+		if( $this->sourceVideoComplete() ) {
+
+			@unlink($path);
+
+			return true;
+
+		}
+
+		return $this->writeSource(function($dest) use ($path) { return rename($path, $dest); });
+
+	}
+
 	/**
 	 * Writes the source through a temporary name in the job directory and renames it into place once it has the size the
 	 * row says, so a file at inProgressPath() is always complete: a concurrent writer (two requests for the same file) or
@@ -1569,20 +1584,6 @@ class TranscodingJob {
 		$this->startTranscode();
 
 		return true;
-
-	}
-
-	/** This job's source is new to the cloud and the cloud queue should upload it (a reused hub-path row that received an upload) */
-	public function setSrcIsNew() {
-
-		$this->srcIsNew = true;
-		$this->data['src_is_new'] = 1;
-
-		$sql = "UPDATE transcoding_jobs
-			SET src_is_new = 1
-			WHERE id = " . (int)$this->id;
-
-		if( !db()->sql_query($sql) ) throw new QueryException("Error updating", $sql);
 
 	}
 
@@ -3318,11 +3319,17 @@ class Cron {
 
 			foreach( $jobs as $tcJob ) {
 
+				// The directory: nothing else makes it for a row that reached the cloud path without a sibling copy (the
+				// downloader's HTTP client refuses a sink in a missing directory, and the library makes none). The download
+				// goes to a temporary name and is renamed into place once complete (writeSource()), so the source path
+				// never holds a partial body or a failed request's error body
+				$tcJob->createInProgressDir();
+
 				$downloader->addFileToDownload([
 					'tcJob' => $tcJob,
 					'BucketName' => Config::get('b2_bucket_name'),
 					'FileName' => $tcJob->getSrcCloudPath(),
-					'SaveAs' => $tcJob->inProgressPath()
+					'SaveAs' => $tcJob->inProgressPath() . '.' . uniqid('', true) . '.download'
 				]);
 
 			}
@@ -3336,8 +3343,7 @@ class Cron {
 
 			foreach( $downloader->getAllFailedFiles() as $failedFileOptions ) {
 
-				/** @var TranscodingJob $tcJob */
-				$tcJob = $failedFileOptions['tcJob'];
+				@unlink($failedFileOptions['SaveAs']);
 
 			}
 
@@ -3348,6 +3354,16 @@ class Cron {
 				$fileOptions = $downloadFileResult->originalFileOptions;
 				/** @var TranscodingJob $tcJob */
 				$tcJob = $fileOptions['tcJob'];
+
+				if( !$tcJob->adoptSourceFile($fileOptions['SaveAs']) ) {
+
+					// Short (a cut-off transfer the client didn't report) or unrenameable: left queued, downloaded again next
+					// second, bounded by the sweep's never_ready
+					Logger::logEvent('cloud_download_src_incomplete', [ 'message' => 'Downloaded source not adopted', 'data' => [ 'jobId' => $tcJob->id ] ]);
+
+					continue;
+
+				}
 
 				$tcJob->setTranscodeReady();
 
