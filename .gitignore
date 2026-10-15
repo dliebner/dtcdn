@@ -2,3 +2,22 @@
 local/constants.php
 local/passwords
 /vendor/
+# The repo root is the dtcdn user's home directory on a server, so its shell, tool and build state lands here:
+# every dotfile and dotdir (.ssh, .gnupg, .mysql_history, .my.cnf, .docker, .bash_history, .nvm, .pm2, ...)
+/.*
+!/.gitignore
+!/.vscode/
+composer.json
+composer.lock
+node-micro/screenshotter/node_modules/
+node-micro/screenshotter/cache/
+node-micro/screenshotter/package-lock.json
+devel/cpp-redis-pipe/cpp_redis/
+devel/cpp-redis-pipe/lib/
+devel/cpp-redis-pipe/redis-pipe
+scripts/redis-pipe
+# served videos, logs and transcoding work directories
+www/v/*
+!www/v/.htaccess
+logs/
+transcoding/

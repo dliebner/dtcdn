@@ -153,6 +153,34 @@ switch( $action ) {
 
 		}
 
+		// Failed or stale jobs end the upload. Every stale job still waiting for a slot is dropped first (nobody waits for
+		// it any more, and a retry would otherwise be handed the stale sibling and fail at once), then one error is returned.
+		$errorMessage = null;
+		$errorData = null;
+
+		foreach( $jobsByPt as $job ) {
+
+			if( $job->hasFailed() ) {
+
+				$errorMessage = $errorMessage ?: "There was an error transcoding the video.";
+				$errorData = $errorData ?: [
+					'failCode' => json_decode($job->data['transcode_fail_code']),
+					'failOutput' => json_decode($job->data['transcode_fail_output']),
+				];
+
+			} else if( $job->isStale() ) {
+
+				// A job whose finish is being retried keeps its output and the sweep decides; a waiting one is abandoned
+				if( !$job->transcodeStarted ) $job->markFailed('abandoned', null, 'reported stale to the uploader while waiting ' . $job->ageMinutes() . ' min', true);
+
+				$errorMessage = $errorMessage ?: "The video is taking too long to process. Please try again later.";
+
+			}
+
+		}
+
+		if( $errorMessage ) AjaxResponse::returnError($errorMessage, debugEnabled() ? $errorData : null);
+
 		$returnProgressTokens = [];
 		foreach( $jobsByPt as $pt => $job ) {
 
@@ -186,13 +214,15 @@ switch( $action ) {
 
 				if( $pctComplete === false ) {
 
-					AjaxResponse::returnError("There was an error transcoding the video.", debugEnabled() ? [
-						'execResult' => $execResult,
-						'dockerOutput' => $dockerOutput,
-					] : null);
+					// The log couldn't be read this time (docker busy or restarting). The job itself is decided by the die
+					// handler or the sweep, which fail it if the container is gone; until then report no progress rather
+					// than end the upload over one failed read.
+					$pctComplete = 0;
 
 				}
 
+				// $isFinished means ffmpeg is done but the job isn't: the die handler (or the sweep, within a minute) still
+				// has to move the output and register the version, so the client keeps polling and sees 100% meanwhile
 				$ret += [
 					"isFinished" => false,
 					"pctComplete" => $pctComplete,
@@ -392,6 +422,45 @@ switch( $action ) {
 					$constrainWidth, $constrainHeight, $passThroughVideo, $saveAsHls
 				);
 
+				// A job for this version may already be running or done (the uploader gave up and the user tried again):
+				// report it rather than start a second one into the same work directory. One still waiting for its source
+				// (a hub-initiated job whose cloud download hasn't happened) gets this upload as its source.
+				if( $existingJob = TranscodingJob::findReusableJob($versionFilename) ) {
+
+					if( !$existingJob->transcodeStarted && !$existingJob->transcodeFinished && !$existingJob->data['cloud_download_src_in_progress'] ) {
+
+						// Sources are written through a temporary name (TranscodingJob::writeSource()), so a file at the
+						// source path is complete; a row with none gets this upload. A row with a complete source that was
+						// never marked ready is a request that died before marking it, started here once it's old enough that
+						// no live request is about to (startIfAbandonedBeforeReady()); a younger one is left to that request.
+						if( !$existingJob->sourceVideoComplete() ) {
+
+							$written = $movedUploadedFile ? $existingJob->copySourceFrom($movedUploadedFile) : $existingJob->moveUploadedFile($tmpFile);
+
+							if( !$written ) AjaxResponse::returnError("Error preparing transcoding job.");
+
+							if( !$movedUploadedFile ) $movedUploadedFile = $existingJob;
+
+							if( !$existingJob->data['transcode_ready'] ) {
+
+								$existingJob->setTranscodeReady();
+								$existingJob->startTranscode();
+
+							}
+
+						} else {
+
+							$existingJob->startIfAbandonedBeforeReady();
+
+						}
+
+					}
+
+					$progressTokens[] = $existingJob->progressToken;
+					continue;
+
+				}
+
 				// Start new job
 				$tcJob = TranscodingJob::create($sourceFilename, $sourceIsNew, $originalExtension, $fileSizeBytes, $duration, $versionFilename, $targetWidth, $targetHeight, new TranscodingJobSettings(
 					$targetBitRate,
@@ -422,9 +491,9 @@ switch( $action ) {
 
 				} else {
 
-					// Copy source video to new job's inProgressPath
-					$tcJob->createInProgressDir();
-					copy($movedUploadedFile->inProgressPath(), $tcJob->inProgressPath());
+					// Copy source video to new job's inProgressPath (checked: a copy cut short by a full disk must not be
+					// marked ready and encoded)
+					if( !$tcJob->copySourceFrom($movedUploadedFile) ) AjaxResponse::returnError("Error preparing transcoding job.");
 
 				}
 

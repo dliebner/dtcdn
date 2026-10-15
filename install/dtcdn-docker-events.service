@@ -1,9 +1,13 @@
 [Unit]
 Description=DTCDN Docker Event handler
+# docker events exits when the Docker daemon isn't up, so start after it and come back with it
+After=docker.service
+Requires=docker.service
 
 [Service]
 ExecStart=/home/dtcdn/daemon/docker-events.sh
-Restart=on-failure
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

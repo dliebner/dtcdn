@@ -204,10 +204,40 @@ su - dtcdn -c "npm install pm2 -g"
 # go back to install dir
 cd /home/dtcdn/install
 
+# DNS: systemd-resolved's stub, with a cache and a fallback resolver. A provider image may ship a static
+# /etc/resolv.conf naming one upstream, which means no cache and no fallback: every hub call then pays for a
+# lookup, and one slow answer fails the call (the hub client's connect timeout covers the lookup). Cache=yes is
+# the default on 20.04; Ubuntu 24.04 ships Cache=no-negative, which re-asks for every missing AAAA record.
+# Idempotent: nothing is touched when the drop-in already matches.
+RESOLVED_DROPIN=/etc/systemd/resolved.conf.d/dns.conf
+RESOLVED_CONF="[Resolve]
+DNS=1.1.1.1 8.8.8.8
+FallbackDNS=1.0.0.1 8.8.4.4
+Domains=~.
+Cache=yes"
+if [ ! -f "$RESOLVED_DROPIN" ] || [ "$(cat "$RESOLVED_DROPIN")" != "$RESOLVED_CONF" ]; then
+	sudo mkdir -p /etc/systemd/resolved.conf.d
+	echo "$RESOLVED_CONF" | sudo tee "$RESOLVED_DROPIN" > /dev/null
+	# resolved first, and only then point resolv.conf at its stub, so an image without resolved keeps its DNS
+	sudo systemctl enable --now systemd-resolved
+	sudo systemctl restart systemd-resolved
+	test -e /run/systemd/resolve/stub-resolv.conf
+	sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+fi
+
 # copy files
-sudo cp dtcdn-sudoers /etc/sudoers.d/
+# the crons' log directory: dtcdn-owned and not world-writable (the repo's logs/ is 0777, where a planted symlink
+# would redirect a cron's output into any file dtcdn can write)
+sudo mkdir -p /var/log/dtcdn
+sudo chown dtcdn:dtcdn /var/log/dtcdn
+sudo chmod 0750 /var/log/dtcdn
+
+visudo -cf dtcdn-sudoers # check before it is in place: a bad file there breaks sudo for the whole box
+sudo install -m 0440 dtcdn-sudoers /etc/sudoers.d/dtcdn-sudoers
 sudo cp dtcdn-cron /etc/cron.d/
 sudo cp dtcdn-docker-events.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo cp dtcdn-logrotate /etc/logrotate.d/dtcdn
 
 # chown files again
 chown -R dtcdn:dtcdn /home/dtcdn/

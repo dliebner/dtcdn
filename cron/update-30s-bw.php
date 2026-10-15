@@ -24,8 +24,6 @@ while( time() - 60 < $start ) {
 		'port_saturation_pct' => round($bytes30s * 8 / 30 / CDNTools::getPortSpeedBits(), 4),
 	]);
 
-	print_r($updates);
-
 	$timeElapsed = stop_timer('update30sBw');
 	$waitSeconds = max(0, 1 - $timeElapsed);
 	usleep($waitSeconds * 1000000);

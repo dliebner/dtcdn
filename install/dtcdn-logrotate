@@ -1,0 +1,35 @@
+# /etc/logrotate.d/dtcdn
+
+# the dtcdn crons' logs (install/dtcdn-cron)
+/var/log/dtcdn/*.log {
+	weekly
+	rotate 4
+	compress
+	delaycompress
+	missingok
+	notifempty
+	su dtcdn dtcdn
+	create 0640 dtcdn dtcdn
+}
+
+# Logger's fallback files in the repo's logs/, written by Apache and the crons; dtcdn is in the www-data group
+/home/dtcdn/logs/*.html {
+	weekly
+	rotate 4
+	compress
+	delaycompress
+	missingok
+	notifempty
+	su dtcdn dtcdn
+	create 0664 dtcdn www-data
+}
+
+# the root cron's prune log (install/dtcdn-cron)
+/var/log/dtcdn-docker-prune.log {
+	weekly
+	rotate 4
+	compress
+	delaycompress
+	missingok
+	notifempty
+}

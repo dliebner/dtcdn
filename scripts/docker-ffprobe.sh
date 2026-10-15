@@ -15,4 +15,5 @@ if [ ! -z "$dir" ]; then
 	dirParams+=( -w "$dir" )
 fi
 
-docker run "${dirParams[@]}" dliebner/ffmpeg-entrydefault ffprobe -v quiet -print_format json -show_format -show_streams "$filename"
+# No network: a probe needs none. Root inside the container stays, since the upload temp file is 0600 www-data.
+docker run "${dirParams[@]}" --network none --label dtcdn.managed=1 dliebner/ffmpeg-entrydefault ffprobe -v quiet -print_format json -show_format -show_streams "$filename"

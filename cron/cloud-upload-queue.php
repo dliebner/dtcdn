@@ -51,6 +51,8 @@ while( time() - $maxWaitTime < $start ) {
 
 		$srcCloudUploads = [];
 		$versionCloudUploads = [];
+		$missingSrcJobIds = [];
+		$missingVersionJobIds = [];
 
 		$client = CDNClient::getB2Client();
 		$bucketId = $client->getBucketFromName(Config::get('b2_bucket_name'))->getId();
@@ -59,24 +61,33 @@ while( time() - $maxWaitTime < $start ) {
 
 		foreach( $tJobs as $job ) {
 
-			if( $job->srcIsNew && !$job->data['src_cloud_upload_started'] ) {
+			if( $job->srcIsNew && !$job->data['src_cloud_upload_started'] && !$job->data['src_cloud_upload_finished'] ) {
 
-				$srcCloudUploads[] = $job;
+				if( !file_exists($job->inProgressPath()) ) {
 
-				$pup->addFileToUpload($file = [
-					'dtcdn:jobId' => $job->id,
-					'dtcdn:type' => 'src',
-					'FileName' => $job->getSrcCloudPath(),
-					'LocalFile' => $job->inProgressPath()
-				]);
+					// Gone (the hub deleted the source as an orphan before this ran): nothing to upload, ever
+					$missingSrcJobIds[] = $job->id;
+
+				} else {
+
+					$srcCloudUploads[] = $job;
+
+					$pup->addFileToUpload($file = [
+						'dtcdn:jobId' => $job->id,
+						'dtcdn:type' => 'src',
+						'FileName' => $job->getSrcCloudPath(),
+						'LocalFile' => $job->inProgressPath()
+					]);
+
+				}
 
 				//print_r($file); echo "\n";
 
 			}
 			
-			if( $job->data['transcode_is_finished'] && !$job->data['cloud_upload_started'] ) {
-
-				$versionCloudUploads[] = $job;
+			// Not a failed job (selected here through its new source, which its sibling versions still need in B2): its
+			// version file is gone, or kept only for the hub's possible record of it (finish_timeout)
+			if( $job->data['transcode_is_finished'] && !$job->data['cloud_upload_started'] && !$job->data['cloud_upload_finished'] && !$job->hasFailed() ) {
 
 				if( $job->isHls() ) {
 
@@ -89,6 +100,15 @@ while( time() - $maxWaitTime < $start ) {
 					$localFile = VideoPath::mp4LocalPath($job->versionFilename);
 
 				}
+
+				if( !file_exists($localFile) ) {
+
+					$missingVersionJobIds[] = $job->id;
+					continue;
+
+				}
+
+				$versionCloudUploads[] = $job;
 
 				$pup->addFileToUpload($file = [
 					'dtcdn:jobId' => $job->id,
@@ -126,58 +146,78 @@ while( time() - $maxWaitTime < $start ) {
 
 		}
 
-		TranscodingJob::setSrcCloudUploadStarted($srcCloudUploads);
-		TranscodingJob::setCloudUploadStarted($versionCloudUploads);
+		if( $missingSrcJobIds || $missingVersionJobIds ) {
 
-		$pup->doUpload();
+			TranscodingJob::abandonCloudUpload('src', $missingSrcJobIds);
+			TranscodingJob::abandonCloudUpload('version', $missingVersionJobIds);
 
-		if( $uploadedFiles = $pup->getAllUploadedFiles() ) {
-
-			$finishedSrcCloudUploadJobIds = [];
-			$finishedCloudUploadJobIds = [];
-
-			foreach( $uploadedFiles as $uploadedFileResult ) {
-
-				$type = $uploadedFileResult->originalFile['dtcdn:type'];
-				$jobId = $uploadedFileResult->originalFile['dtcdn:jobId'];
-
-				if( $type === 'src' ) $finishedSrcCloudUploadJobIds[] = $jobId;
-				if( $type === 'version' ) $finishedCloudUploadJobIds[] = $jobId;
-
-			}
-
-			TranscodingJob::setSrcCloudUploadFinished($finishedSrcCloudUploadJobIds);
-			TranscodingJob::setCloudUploadFinished($finishedCloudUploadJobIds);
+			Logger::logEvent('cloud_upload_file_missing', [
+				'message' => 'Local file gone before its cloud upload; marked finished so the job can expire',
+				'data' => [ 'srcJobIds' => $missingSrcJobIds, 'versionJobIds' => $missingVersionJobIds ]
+			]);
 
 		}
 
-		if( $failedFiles = $pup->getAllFailedFiles() ) {
+		TranscodingJob::setSrcCloudUploadStarted($srcCloudUploads);
+		TranscodingJob::setCloudUploadStarted($versionCloudUploads);
 
-			$failedSrcCloudUploadJobIds = [];
-			$failedCloudUploadJobIds = [];
+		if( $pup->numFilesToUpload() ) {
 
-			foreach( $uploadedFiles as $uploadedFileResult ) {
+			$pup->doUpload();
 
-				$type = $uploadedFileResult->originalFile['dtcdn:type'];
-				$jobId = $uploadedFileResult->originalFile['dtcdn:jobId'];
+			if( $uploadedFiles = $pup->getAllUploadedFiles() ) {
 
-				if( $type === 'src' ) $failedSrcCloudUploadJobIds[] = $jobId;
-				if( $type === 'version' ) $failedCloudUploadJobIds[] = $jobId;
+				$finishedSrcCloudUploadJobIds = [];
+				$finishedCloudUploadJobIds = [];
+
+				foreach( $uploadedFiles as $uploadedFileResult ) {
+
+					$type = $uploadedFileResult->originalFile['dtcdn:type'];
+					$jobId = $uploadedFileResult->originalFile['dtcdn:jobId'];
+
+					if( $type === 'src' ) $finishedSrcCloudUploadJobIds[] = $jobId;
+					if( $type === 'version' ) $finishedCloudUploadJobIds[] = $jobId;
+
+				}
+
+				TranscodingJob::setSrcCloudUploadFinished($finishedSrcCloudUploadJobIds);
+				TranscodingJob::setCloudUploadFinished($finishedCloudUploadJobIds);
 
 			}
 
-			TranscodingJob::unsetSrcCloudUploadStarted($finishedSrcCloudUploadJobIds);
-			TranscodingJob::unsetCloudUploadStarted($finishedCloudUploadJobIds);
+			if( $failedFiles = $pup->getAllFailedFiles() ) {
 
-			Logger::logEvent('b2_failed_upload', [
-				'data' => [
-					'failedFiles' => $failedFiles
-				]
-			]);
+				// A failed file is the option array given to addFileToUpload(). Push back the _started mark of each job whose
+				// upload failed so the sweep re-queues it in a few minutes; a failed poster re-queues its version, which
+				// carries the posters. (Until 2026-10 this looped over the uploaded files and cleared the finished jobs' marks
+				// instead, so a failed upload was never retried and finished ones were uploaded again.)
+				$failedSrcCloudUploadJobIds = [];
+				$failedCloudUploadJobIds = [];
 
-			echo "Failed files:\n";
-			print_r($failedFiles);
-			echo "\n";
+				foreach( $failedFiles as $failedFile ) {
+
+					$type = $failedFile['dtcdn:type'];
+					$jobId = $failedFile['dtcdn:jobId'];
+
+					if( $type === 'src' ) $failedSrcCloudUploadJobIds[] = $jobId;
+					if( $type === 'version' || $type === 'poster' ) $failedCloudUploadJobIds[] = $jobId;
+
+				}
+
+				TranscodingJob::deferCloudUploadRetry('src', $failedSrcCloudUploadJobIds);
+				TranscodingJob::deferCloudUploadRetry('version', $failedCloudUploadJobIds);
+
+				Logger::logEvent('b2_failed_upload', [
+					'data' => [
+						'failedFiles' => $failedFiles
+					]
+				]);
+
+				echo "Failed files:\n";
+				print_r($failedFiles);
+				echo "\n";
+
+			}
 
 		}
 
