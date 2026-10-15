@@ -427,24 +427,34 @@ switch( $action ) {
 				// (a hub-initiated job whose cloud download hasn't happened) gets this upload as its source.
 				if( $existingJob = TranscodingJob::findReusableJob($versionFilename) ) {
 
-					if( !$existingJob->transcodeStarted && !$existingJob->transcodeFinished && !$existingJob->sourceVideoExistsOnDisk() && !$existingJob->data['cloud_download_src_in_progress'] ) {
+					if( !$existingJob->transcodeStarted && !$existingJob->transcodeFinished && !$existingJob->data['cloud_download_src_in_progress'] ) {
 
-						$existingJob->createInProgressDir();
+						if( !$existingJob->sourceVideoExistsOnDisk() ) {
 
-						if( !$movedUploadedFile ) {
+							$existingJob->createInProgressDir();
 
-							if( !$existingJob->moveUploadedFile($tmpFile) ) AjaxResponse::returnError("Error preparing transcoding job.");
+							if( !$movedUploadedFile ) {
 
-							$movedUploadedFile = $existingJob;
+								if( !$existingJob->moveUploadedFile($tmpFile) ) AjaxResponse::returnError("Error preparing transcoding job.");
 
-						} else {
+								$movedUploadedFile = $existingJob;
 
-							copy($movedUploadedFile->inProgressPath(), $existingJob->inProgressPath());
+							} else {
+
+								copy($movedUploadedFile->inProgressPath(), $existingJob->inProgressPath());
+
+							}
 
 						}
 
-						$existingJob->setTranscodeReady();
-						$existingJob->startTranscode();
+						// Also a row whose source is on disk but was never marked ready (its upload-video request died between
+						// the move and setTranscodeReady()): nothing else would ever start it, and its token would sit at 0%
+						if( !$existingJob->data['transcode_ready'] ) {
+
+							$existingJob->setTranscodeReady();
+							$existingJob->startTranscode();
+
+						}
 
 					}
 

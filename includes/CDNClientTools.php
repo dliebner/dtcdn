@@ -1997,9 +1997,15 @@ class TranscodingJob {
 			// Get real path for our folder
 			$basePath = realpath(VideoPath::hlsVideoFilesLocalFolder($this->versionFilename));
 
+			// The zip is written inside the folder it archives. A previous attempt's zip (a finish being retried, or a
+			// job reusing a finish_timeout row's directory) must not go into this one, nor count towards the size
+			// registered with the hub; it's removed first and skipped below in case something else wrote one meanwhile
+			$zipPath = VideoPath::hlsZipLocalPath($this->versionFilename);
+			@unlink($zipPath);
+
 			// Initialize archive object
 			$zip = new ZipArchive();
-			$zip->open(VideoPath::hlsZipLocalPath($this->versionFilename), ZipArchive::CREATE | ZipArchive::OVERWRITE);
+			$zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
 
 			// Create recursive directory iterator
 			/** @var SplFileInfo[] $files */
@@ -2011,8 +2017,8 @@ class TranscodingJob {
 			$i = 0;
 			foreach( $files as $file ) {
 
-				// Skip directories (they would be added automatically)
-				if( !$file->isDir() ) {
+				// Skip directories (they would be added automatically) and the zip itself
+				if( !$file->isDir() && $file->getFilename() !== basename($zipPath) ) {
 
 					// Count size in bytes
 					$totalSizeBytes += $file->getSize();
@@ -2401,6 +2407,12 @@ class TranscodingJob {
 								$job->unlock();
 
 							}
+
+						} else if( $expired && $job->markFailed('finish_blocked', json_decode($job->data['transcode_fail_output'], true), "lock never acquired for the finish_timeout mark, active $activeMinutes min") ) {
+
+							// A lock nothing will release (a process stuck inside finishTranscode()): the same way out as
+							// the exited-container branch below, or the row would never expire
+							$report['failed']++;
 
 						}
 
