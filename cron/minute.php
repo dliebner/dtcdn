@@ -36,7 +36,8 @@ try {
 $sweep = TranscodingJob::sweepActiveJobs();
 $sweep['cloudUploadsRequeued'] = TranscodingJob::resetStaleCloudUploads();
 
-if( array_filter($sweep) ) echo date('c') . ' sweep: ' . json_encode($sweep) . "\n";
+// A line when the sweep did something, or couldn't read a job's state; not for jobs merely encoding
+if( array_filter(array_diff_key($sweep, [ 'running' => 0 ])) ) echo date('c') . ' sweep: ' . json_encode($sweep) . "\n";
 
 ServerStatus::setMulti([
 	'transcode_jobs_active' => TranscodingJob::numActiveTranscodingJobs(),

@@ -1188,6 +1188,12 @@ class TranscodingJob {
 	 * since the published files are kept and the hub may still hold the version.
 	 */
 	const TRANSCODE_FINISH_RETRY_MAX_MINUTES = 50;
+	/**
+	 * An unstarted row with a partial or missing source younger than this is another upload-video request still writing
+	 * it (a copy() of a large source takes seconds); an older one is a request that died, and a retry writes the source
+	 * itself. A never-ready row with a complete source is started by a retry only once it is this old, for the same reason.
+	 */
+	const TRANSCODE_SOURCE_WRITE_GRACE_MINUTES = 2;
 	/** A claim (transcode_started) with no container recorded yet is startTranscode() mid-run for this long; older ones are released */
 	const TRANSCODE_CLAIM_GRACE_MINUTES = 5;
 	/** A cloud upload still failing or stalling this long after its job was created is abandoned rather than retried again */
@@ -1269,6 +1275,21 @@ class TranscodingJob {
 	public function sourceVideoExistsOnDisk() {
 
 		return file_exists($this->inProgressPath());
+
+	}
+
+	/**
+	 * The source is on disk with the size the row says it has. A copy() in progress (another upload-video request writing
+	 * the same version's source) or one a dead request left behind is a smaller file at the same path, so file_exists()
+	 * alone would have ffmpeg started on a partial source.
+	 */
+	public function sourceVideoComplete() {
+
+		$path = $this->inProgressPath();
+
+		clearstatcache(true, $path);
+
+		return is_file($path) && filesize($path) === $this->srcSizeBytes;
 
 	}
 
@@ -1436,9 +1457,13 @@ class TranscodingJob {
 
 	public function moveUploadedFile($tmpFile) {
 
-		if( $this->sourceVideoExistsOnDisk() ) return true;
+		// A complete source already there (a sibling job's copy, or a reused directory) is kept; a partial one (a request
+		// that died mid-copy) is replaced, since until 2026-10 it was kept and the fresh upload discarded
+		if( $this->sourceVideoComplete() ) return true;
 
 		$this->createInProgressDir();
+
+		if( $this->sourceVideoExistsOnDisk() ) @unlink($this->inProgressPath());
 
 		return move_uploaded_file($tmpFile, $this->inProgressPath());
 
@@ -2003,9 +2028,10 @@ class TranscodingJob {
 			$zipPath = VideoPath::hlsZipLocalPath($this->versionFilename);
 			@unlink($zipPath);
 
-			// Initialize archive object
+			// Initialize archive object. open() returns an error code, not an exception; without the check a version
+			// could be registered with no zip (never uploaded to B2, and a home server's download of it fails)
 			$zip = new ZipArchive();
-			$zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+			if( ($zipOpen = $zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE)) !== true ) throw new GeneralExceptionWithData("Could not create the HLS zip", [ 'zipPath' => $zipPath, 'error' => $zipOpen ]);
 
 			// Create recursive directory iterator
 			/** @var SplFileInfo[] $files */
@@ -2039,7 +2065,7 @@ class TranscodingJob {
 			}
 
 			// Zip archive will be created only after closing object
-			$zip->close();
+			if( !$zip->close() ) throw new GeneralExceptionWithData("Could not write the HLS zip", [ 'zipPath' => $zipPath, 'status' => $zip->getStatusString() ]);
 
 		} else {
 

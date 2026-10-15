@@ -429,7 +429,14 @@ switch( $action ) {
 
 					if( !$existingJob->transcodeStarted && !$existingJob->transcodeFinished && !$existingJob->data['cloud_download_src_in_progress'] ) {
 
-						if( !$existingJob->sourceVideoExistsOnDisk() ) {
+						// A source smaller than the row says is a copy() still in progress (another request for the same file,
+						// which will mark the row ready and start it) while the row is young, or a dead request's leftover
+						// once it isn't. Only in the second case, or with no source at all, does this request write the source
+						$sourceComplete = $existingJob->sourceVideoComplete();
+						$rowOld = $existingJob->ageMinutes() >= TranscodingJob::TRANSCODE_SOURCE_WRITE_GRACE_MINUTES;
+						$wroteSource = false;
+
+						if( !$sourceComplete && ($rowOld || !$existingJob->sourceVideoExistsOnDisk()) ) {
 
 							$existingJob->createInProgressDir();
 
@@ -445,11 +452,14 @@ switch( $action ) {
 
 							}
 
+							$wroteSource = true;
+
 						}
 
-						// Also a row whose source is on disk but was never marked ready (its upload-video request died between
-						// the move and setTranscodeReady()): nothing else would ever start it, and its token would sit at 0%
-						if( !$existingJob->data['transcode_ready'] ) {
+						// Start a row that was never marked ready when this request wrote its source, or when the source is
+						// complete and the request that wrote it is long gone (it died between the move and setTranscodeReady();
+						// nothing else would ever start the row, and its token would sit at 0%). Never on a partial source.
+						if( !$existingJob->data['transcode_ready'] && ($wroteSource || ($sourceComplete && $rowOld)) ) {
 
 							$existingJob->setTranscodeReady();
 							$existingJob->startTranscode();
